@@ -32,7 +32,7 @@ internal sealed class LiveUsageReader
             using var response = HttpClient.Send(request);
             if (!response.IsSuccessStatusCode)
             {
-                return LiveUsageResult.Failed($"Live quota request returned {(int)response.StatusCode}.");
+                return LiveUsageResult.Failed($"实时额度请求返回 HTTP {(int)response.StatusCode}。");
             }
 
             using var document = JsonDocument.Parse(response.Content.ReadAsStream());
@@ -44,12 +44,12 @@ internal sealed class LiveUsageReader
                 buckets,
                 availableResetCredits,
                 UsageEndpoint,
-                "Live quota from Codex."
+                "Codex 实时额度。"
             );
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or JsonException or InvalidOperationException)
         {
-            return LiveUsageResult.Failed($"Live quota unavailable: {ex.Message}");
+            return LiveUsageResult.Failed($"暂时无法获取实时额度。{ex.Message}");
         }
     }
 
@@ -60,14 +60,14 @@ internal sealed class LiveUsageReader
         var root = document.RootElement;
         if (!root.TryGetProperty("tokens", out var tokens) || tokens.ValueKind != JsonValueKind.Object)
         {
-            throw new InvalidOperationException("Codex login tokens were not found.");
+            throw new InvalidOperationException("未找到 Codex 登录凭据。");
         }
 
         var accessToken = ReadString(tokens, "access_token");
         var accountId = ReadString(tokens, "account_id");
         if (string.IsNullOrWhiteSpace(accessToken) || string.IsNullOrWhiteSpace(accountId))
         {
-            throw new InvalidOperationException("Codex login tokens are incomplete.");
+            throw new InvalidOperationException("Codex 登录凭据不完整。");
         }
 
         return new AuthInfo(accessToken, accountId);

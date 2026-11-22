@@ -64,7 +64,7 @@ public sealed class CodexQuotaReader
         var today = DateOnly.FromDateTime(localNow.DateTime);
         var liveUsage = includeLiveQuota
             ? _liveUsageReader.Read()
-            : LiveUsageResult.Failed("Codex live quota query disabled.");
+            : LiveUsageResult.Failed("已跳过 Codex 实时额度查询。");
 
         QuotaBucket primary;
         QuotaBucket secondary;
@@ -284,28 +284,28 @@ public sealed class CodexQuotaReader
         var missing = new List<string>();
         if (!primary.IsAvailable)
         {
-            missing.Add("5h");
+            missing.Add("5 小时");
         }
 
         if (!secondary.IsAvailable)
         {
-            missing.Add("week");
+            missing.Add("周");
         }
 
         var availability = missing.Count == 0
             ? ""
-            : $" {string.Join(" and ", missing)} quota not provided by Codex.";
-        return $"{liveStatus}{availability} Read {scannedFiles} recent session files for token totals.";
+            : $" Codex 未提供{string.Join("和", missing)}额度。";
+        return $"{liveStatus}{availability} 已从 {scannedFiles} 个会话文件统计用量。";
     }
 
     private static string BuildFallbackStatus(string liveStatus, TokenCountEvent? latest, int scannedFiles)
     {
         if (latest is null)
         {
-            return $"{liveStatus} No token_count events found in {scannedFiles} recent session files.";
+            return $"{liveStatus} 最近 {scannedFiles} 个会话文件中没有用量记录。";
         }
 
-        return $"{liveStatus} Showing the latest local quota event from {latest.Timestamp.LocalDateTime:MM/dd HH:mm}.";
+        return $"{liveStatus} 当前显示 {latest.Timestamp.LocalDateTime:MM/dd HH:mm} 的本地额度记录。";
     }
 
     private static long ReadInt64(JsonElement element) =>

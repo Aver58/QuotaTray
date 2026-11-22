@@ -18,7 +18,7 @@ public sealed class AntigravityUsageReader
             ".gemini", "antigravity", "daemon");
         if (!Directory.Exists(daemonDirectory))
         {
-            return CodexQuotaSnapshot.Empty("Antigravity app is not running.");
+            return CodexQuotaSnapshot.Empty("请先启动 Antigravity 桌面端。");
         }
 
         foreach (var file in Directory.EnumerateFiles(daemonDirectory, "hub_*.json")
@@ -48,7 +48,7 @@ public sealed class AntigravityUsageReader
             }
         }
 
-        return CodexQuotaSnapshot.Empty("Antigravity quota unavailable. Open or sign in to Antigravity.");
+        return CodexQuotaSnapshot.Empty("暂时无法读取额度，请确认 Antigravity 已运行并登录。");
     }
 
     private static HttpClient CreateClient()
@@ -98,7 +98,7 @@ public sealed class AntigravityUsageReader
 
     private static bool TryCreateSnapshot(JsonDocument document, out CodexQuotaSnapshot snapshot)
     {
-        snapshot = CodexQuotaSnapshot.Empty("Antigravity quota unavailable.");
+        snapshot = CodexQuotaSnapshot.Empty("暂时无法读取 Antigravity 额度。");
         if (!document.RootElement.TryGetProperty("response", out var response) ||
             !response.TryGetProperty("groups", out var groups) || groups.ValueKind != JsonValueKind.Array)
         {
@@ -126,8 +126,8 @@ public sealed class AntigravityUsageReader
             null,
             0,
             Array.Empty<DailyTokenUsage>(),
-            "Antigravity local quota service",
-            "Antigravity live quota");
+            "Antigravity 本地额度服务",
+            "Antigravity 实时额度");
         return true;
     }
 

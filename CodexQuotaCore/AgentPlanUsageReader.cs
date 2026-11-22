@@ -28,12 +28,12 @@ public sealed class AgentPlanUsageReader
             {
                 var detail = ReadErrorMessage(document.RootElement);
                 return WithUnavailableQuotas(localTokenUsage,
-                    $"Volcano Engine Agent Plan request failed ({(int)response.StatusCode}){(detail is null ? "." : $": {detail}")}");
+                    $"火山引擎 Agent Plan 查询失败（HTTP {(int)response.StatusCode}）。{detail}");
             }
 
             if (!document.RootElement.TryGetProperty("Result", out var result) || result.ValueKind != JsonValueKind.Object)
             {
-                return WithUnavailableQuotas(localTokenUsage, "Volcano Engine Agent Plan response did not contain a Result object.");
+                return WithUnavailableQuotas(localTokenUsage, "火山引擎未返回 Agent Plan 用量。");
             }
 
             var fiveHour = ReadBucket(result, "AFPFiveHour", 300);
@@ -44,8 +44,8 @@ public sealed class AgentPlanUsageReader
                 ? planElement.GetString()
                 : null;
             var status = string.IsNullOrWhiteSpace(planType)
-                ? "Live Agent Plan AFP quota from Volcano Engine."
-                : $"Live Agent Plan {planType} AFP quota from Volcano Engine.";
+                ? "火山引擎 Agent Plan 实时 AFP 额度。"
+                : $"火山引擎 Agent Plan（{planType}）实时 AFP 额度。";
 
             return new CodexQuotaSnapshot(
                 DateTimeOffset.UtcNow,
@@ -61,7 +61,7 @@ public sealed class AgentPlanUsageReader
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or JsonException or CryptographicException or InvalidOperationException)
         {
-            return WithUnavailableQuotas(localTokenUsage, $"Volcano Engine Agent Plan unavailable: {ex.Message}");
+            return WithUnavailableQuotas(localTokenUsage, $"暂时无法获取火山引擎 Agent Plan 用量。{ex.Message}");
         }
     }
 

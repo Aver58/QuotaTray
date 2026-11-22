@@ -28,12 +28,12 @@ public partial class AntigravityPanel : System.Windows.Controls.UserControl
     }
 
     private static object Group(string name, QuotaBucket fiveHour, QuotaBucket week) =>
-        new { Name = name, Windows = new[] { Window("5h", fiveHour), Window("Week", week) } };
+        new { Name = name, Windows = new[] { Window("5 小时", fiveHour), Window("周额度", week) } };
 
     private static object Window(string period, QuotaBucket quota) => new
     {
         Period = period,
-        Reset = quota.ResetsAt is { } reset ? $"reset {reset.LocalDateTime:MM/dd HH:mm}" : "reset --",
+        Reset = quota.ResetsAt is { } reset ? $"重置 {reset.LocalDateTime:MM/dd HH:mm}" : "重置 --",
         Remaining = quota.IsAvailable ? $"{quota.RemainingPercent:0.##}%" : "--",
         Used = quota.IsAvailable ? $"{quota.UsedPercent:0.##}%" : "--",
         Fraction = quota.IsAvailable ? Math.Clamp(quota.RemainingPercent / 100, 0, 1) : 0

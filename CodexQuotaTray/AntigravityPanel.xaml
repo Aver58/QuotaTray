@@ -17,7 +17,7 @@
         </Grid.ColumnDefinitions>
         <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <StackPanel>
-            <TextBlock Text="Quota remaining" Style="{StaticResource SectionTitle}"/>
+            <TextBlock Text="剩余额度" Style="{StaticResource SectionTitle}"/>
             <ItemsControl ItemsSource="{Binding Groups}">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
@@ -52,9 +52,9 @@
         <StackPanel Grid.Column="2">
             <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="68"/><ColumnDefinition Width="68"/></Grid.ColumnDefinitions>
-                <TextBlock Text="Quota used" Style="{StaticResource SectionTitle}"/>
-                <TextBlock Grid.Column="1" Text="5h" HorizontalAlignment="Right" Style="{StaticResource SectionTitle}"/>
-                <TextBlock Grid.Column="2" Text="Week" HorizontalAlignment="Right" Style="{StaticResource SectionTitle}"/>
+                <TextBlock Text="已用额度" Style="{StaticResource SectionTitle}"/>
+                <TextBlock Grid.Column="1" Text="5 小时" HorizontalAlignment="Right" Style="{StaticResource SectionTitle}"/>
+                <TextBlock Grid.Column="2" Text="周额度" HorizontalAlignment="Right" Style="{StaticResource SectionTitle}"/>
             </Grid>
             <ItemsControl ItemsSource="{Binding Groups}">
                 <ItemsControl.ItemTemplate>
@@ -68,7 +68,7 @@
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
-            <TextBlock Text="Daily tokens · Last 7 days" Style="{StaticResource SectionTitle}" Margin="0,14,0,5"/>
+            <TextBlock Text="近 7 天每日 Token 用量" Style="{StaticResource SectionTitle}" Margin="0,14,0,5"/>
             <ItemsControl ItemsSource="{Binding Days}">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>

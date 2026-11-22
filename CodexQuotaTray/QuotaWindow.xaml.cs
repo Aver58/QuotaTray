@@ -17,19 +17,19 @@ public partial class QuotaWindow : Window
 
     public event EventHandler? RequestHide;
 
-    public void ApplySnapshot(CodexQuotaSnapshot snapshot)
+    internal void ApplySnapshot(CodexQuotaSnapshot snapshot, QuotaSource source)
     {
         var previousHeight = Height;
         var wasVisible = IsVisible;
-        var isAgentPlan = snapshot.Status.Contains("Agent Plan", StringComparison.OrdinalIgnoreCase);
-        var isAntigravity = snapshot.Status.Contains("Antigravity", StringComparison.OrdinalIgnoreCase);
+        var isAgentPlan = source == QuotaSource.VolcengineAgentPlan;
+        var isAntigravity = source == QuotaSource.Antigravity;
         var secondaryRemaining = Math.Clamp(snapshot.Secondary.RemainingPercent, 0, 100);
         var primaryRemaining = Math.Clamp(snapshot.Primary.RemainingPercent, 0, 100);
         var dailyRemaining = Math.Clamp(snapshot.Daily.RemainingPercent, 0, 100);
         var monthlyRemaining = Math.Clamp(snapshot.Monthly.RemainingPercent, 0, 100);
         var showResetCards = !snapshot.Primary.IsAvailable && snapshot.AvailableResetCredits.HasValue;
 
-        SourceTitleText.Text = isAgentPlan ? "Agent Plan" : isAntigravity ? "Antigravity" : "Codex";
+        SourceTitleText.Text = isAgentPlan ? "火山引擎" : isAntigravity ? "Antigravity" : "Codex";
         Height = isAntigravity ? 410 : isAgentPlan ? 460 : 360;
         if (wasVisible && Math.Abs(previousHeight - Height) > 0.1)
         {
@@ -40,7 +40,7 @@ public partial class QuotaWindow : Window
         StandardQuotaPanel.Visibility = HistoryPanel.Visibility = isAntigravity ? Visibility.Collapsed : Visibility.Visible;
         var status = snapshot.LatestEventAt is null
             ? snapshot.Status
-            : $"Updated {snapshot.LatestEventAt.Value.LocalDateTime:MM/dd HH:mm}  {snapshot.Status}";
+            : $"更新于 {snapshot.LatestEventAt.Value.LocalDateTime:MM/dd HH:mm}  {snapshot.Status}";
         if (isAntigravity)
         {
             ModelUsage.Apply(snapshot, status);
@@ -51,14 +51,14 @@ public partial class QuotaWindow : Window
         MonthlyQuotaPanel.Visibility = snapshot.Monthly.IsAvailable ? Visibility.Visible : Visibility.Collapsed;
         VolcanoBalancePanel.Visibility = isAgentPlan ? Visibility.Visible : Visibility.Collapsed;
         AvailableBalanceText.Text = snapshot.VolcanoBalance is { } accountBalance
-            ? $"Available balance: {accountBalance.AvailableBalance:N2} {accountBalance.Currency}"
-            : "Available balance: unavailable";
+            ? $"可用余额 {accountBalance.AvailableBalance:N2} {accountBalance.Currency}"
+            : "可用余额 暂不可用";
         CashBalanceText.Text = snapshot.VolcanoBalance is { } cashBalance
-            ? $"Cash balance: {cashBalance.CashBalance:N2} {cashBalance.Currency}"
-            : "Cash balance: unavailable";
+            ? $"现金余额 {cashBalance.CashBalance:N2} {cashBalance.Currency}"
+            : "现金余额 暂不可用";
         BalanceErrorText.Text = snapshot.VolcanoBalanceError ?? string.Empty;
         BalanceErrorText.Visibility = snapshot.VolcanoBalanceError is null ? Visibility.Collapsed : Visibility.Visible;
-        PrimaryLabelText.Text = showResetCards ? "Cards" : "5h";
+        PrimaryLabelText.Text = showResetCards ? "重置卡" : "5 小时";
         PrimaryPercentText.Text = showResetCards
             ? snapshot.AvailableResetCredits!.Value.ToString(CultureInfo.InvariantCulture)
             : snapshot.Primary.IsAvailable ? $"{primaryRemaining:0}%" : "--";
@@ -75,10 +75,11 @@ public partial class QuotaWindow : Window
         SecondaryResetText.Text = FormatReset(snapshot.Secondary);
         DailyResetText.Text = FormatReset(snapshot.Daily);
         MonthlyResetText.Text = FormatReset(snapshot.Monthly);
-        TodayTokensText.Text = $"Codex Today {FormatTokens(snapshot.TodayTokens)}";
+        TodayTokensText.Text = $"今日用量 {FormatTokens(snapshot.TodayTokens)} Token";
         Chart.Items = snapshot.LastSevenDays;
         ClockText.Text = DateTime.Now.ToString("HH:mm", CultureInfo.InvariantCulture);
         StatusText.Text = status;
+        StatusText.ToolTip = status;
     }
 
     private void CloseButton_OnClick(object sender, RoutedEventArgs e)
@@ -127,7 +128,7 @@ public partial class QuotaWindow : Window
     {
         if (!bucket.IsAvailable)
         {
-            return "not provided by selected source";
+            return "当前来源未提供";
         }
 
         var amount = bucket.TotalAmount is double total && bucket.UsedAmount is double used && !string.IsNullOrWhiteSpace(bucket.Unit)
@@ -135,10 +136,10 @@ public partial class QuotaWindow : Window
             : string.Empty;
         if (bucket.ResetsAt is null)
         {
-            return $"{amount}reset --";
+            return $"{amount}重置 --";
         }
 
-        return $"{amount}reset {bucket.ResetsAt.Value.LocalDateTime:MM/dd HH:mm}";
+        return $"{amount}重置 {bucket.ResetsAt.Value.LocalDateTime:MM/dd HH:mm}";
     }
 
     private static string FormatQuotaAmount(double amount) =>

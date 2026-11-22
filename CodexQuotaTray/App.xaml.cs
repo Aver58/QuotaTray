@@ -27,7 +27,7 @@ public partial class App : System.Windows.Application
     private ToolStripMenuItem? _agentPlanSourceOption;
     private ToolStripMenuItem? _antigravitySourceOption;
     private QuotaWindow? _window;
-    private CodexQuotaSnapshot _snapshot = CodexQuotaSnapshot.Empty("Starting...");
+    private CodexQuotaSnapshot _snapshot = CodexQuotaSnapshot.Empty("正在启动…");
 
     public App()
     {
@@ -44,7 +44,7 @@ public partial class App : System.Windows.Application
         _trayIcon = new NotifyIcon
         {
             Visible = true,
-            Text = "Codex quota",
+            Text = "额度组件",
             ContextMenuStrip = BuildMenu()
         };
         _trayIcon.MouseClick += TrayIconOnMouseClick;
@@ -82,15 +82,15 @@ public partial class App : System.Windows.Application
     private ContextMenuStrip BuildMenu()
     {
         var menu = new ContextMenuStrip();
-        menu.Items.Add("Open", null, (_, _) => ShowPopup());
-        menu.Items.Add("Refresh", null, (_, _) => RefreshSnapshot());
-        var displayOptions = new ToolStripMenuItem("Display options");
+        menu.Items.Add("打开面板", null, (_, _) => ShowPopup());
+        menu.Items.Add("立即刷新", null, (_, _) => RefreshSnapshot());
+        var displayOptions = new ToolStripMenuItem("显示来源");
         _codexSourceOption = new ToolStripMenuItem("Codex")
         {
             Checked = _settings.Source == QuotaSource.Codex
         };
         _codexSourceOption.Click += (_, _) => SwitchQuotaSource(QuotaSource.Codex);
-        _agentPlanSourceOption = new ToolStripMenuItem("Volcano Engine · Agent Plan")
+        _agentPlanSourceOption = new ToolStripMenuItem("火山引擎 · Agent Plan")
         {
             Checked = _settings.Source == QuotaSource.VolcengineAgentPlan
         };
@@ -104,7 +104,7 @@ public partial class App : System.Windows.Application
         displayOptions.DropDownItems.Add(_agentPlanSourceOption);
         displayOptions.DropDownItems.Add(_antigravitySourceOption);
         menu.Items.Add(displayOptions);
-        menu.Items.Add("Settings", null, (_, _) => ShowSettings());
+        menu.Items.Add("设置", null, (_, _) => ShowSettings());
         menu.Items.Add(new ToolStripSeparator());
         _checkUpdate = new ToolStripMenuItem($"检查更新 · v{ReleaseUpdater.Current}", null, (_, _) => CheckForUpdate(manual: true));
         menu.Items.Add(_checkUpdate);
@@ -122,7 +122,7 @@ public partial class App : System.Windows.Application
             catch (Exception ex) { System.Windows.MessageBox.Show(ex.Message, "无法保存自动更新设置"); }
         };
         menu.Items.Add(automatic);
-        menu.Items.Add("Exit", null, (_, _) => Shutdown());
+        menu.Items.Add("退出", null, (_, _) => Shutdown());
         return menu;
     }
 
@@ -193,7 +193,7 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        _window.ApplySnapshot(_snapshot);
+        _window.ApplySnapshot(_snapshot, _settings.Source);
         _window.Show();
         _window.Activate();
 
@@ -212,8 +212,6 @@ public partial class App : System.Windows.Application
                 _readingAntigravity = true;
                 try
                 {
-                    if (!_snapshot.Status.Contains("Antigravity", StringComparison.OrdinalIgnoreCase))
-                        _snapshot = CodexQuotaSnapshot.Empty("Loading Antigravity usage…");
                     var result = await System.Threading.Tasks.Task.Run(
                         () => _antigravityHistory.AddTo(_antigravityUsageReader.ReadSnapshot()));
                     if (_settings.Source != QuotaSource.Antigravity) return;
@@ -222,7 +220,7 @@ public partial class App : System.Windows.Application
                 catch (Exception)
                 {
                     if (_settings.Source != QuotaSource.Antigravity) return;
-                    _snapshot = CodexQuotaSnapshot.Empty("Antigravity usage unavailable.");
+                    _snapshot = CodexQuotaSnapshot.Empty("暂时无法获取 Antigravity 用量。");
                 }
                 finally { _readingAntigravity = false; }
             }
@@ -261,7 +259,7 @@ public partial class App : System.Windows.Application
 
         if (_window?.IsVisible == true)
         {
-            _window.ApplySnapshot(_snapshot);
+            _window.ApplySnapshot(_snapshot, _settings.Source);
         }
 
         UpdateTrayIcon(_snapshot);
@@ -283,6 +281,7 @@ public partial class App : System.Windows.Application
         {
             savedSettings = savedSettings with { AutomaticUpdates = _settings.AutomaticUpdates };
             savedSettings.Save();
+            if (_settings.Source != savedSettings.Source) _snapshot = CodexQuotaSnapshot.Empty("正在读取额度…");
             _settings = savedSettings;
             if (_codexSourceOption is not null)
             {
@@ -305,7 +304,7 @@ public partial class App : System.Windows.Application
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show($"Could not save settings: {ex.Message}", "Settings", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show($"保存设置失败。{ex.Message}", "设置", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -328,6 +327,7 @@ public partial class App : System.Windows.Application
         try
         {
             updatedSettings.Save();
+            _snapshot = CodexQuotaSnapshot.Empty("正在读取额度…");
             _settings = updatedSettings;
             if (_codexSourceOption is not null)
             {
@@ -349,7 +349,7 @@ public partial class App : System.Windows.Application
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show($"Could not switch quota source: {ex.Message}", "Display options", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show($"切换来源失败。{ex.Message}", "显示来源", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -368,31 +368,34 @@ public partial class App : System.Windows.Application
         );
         oldIcon?.Dispose();
 
-        _trayIcon.Text = BuildTooltip(snapshot, _settings.TooltipResetWindow);
+        _trayIcon.Text = BuildTooltip(snapshot, _settings.TooltipResetWindow, _settings.Source);
     }
 
-    private static string BuildTooltip(CodexQuotaSnapshot snapshot, ResetTimeWindow resetTimeWindow)
+    private static string BuildTooltip(CodexQuotaSnapshot snapshot, ResetTimeWindow resetTimeWindow, QuotaSource source)
     {
-        var source = snapshot.Status.Contains("Agent Plan", StringComparison.OrdinalIgnoreCase)
-            ? "Agent Plan"
-            : snapshot.Status.Contains("Antigravity", StringComparison.OrdinalIgnoreCase) ? "Antigravity" : "Codex";
+        var sourceName = source switch
+        {
+            QuotaSource.VolcengineAgentPlan => "火山引擎",
+            QuotaSource.Antigravity => "Antigravity",
+            _ => "Codex"
+        };
         var hasFiveHourReset = snapshot.Primary.IsAvailable && snapshot.Primary.ResetsAt is not null;
         var primary = hasFiveHourReset
-            ? $"5h {snapshot.Primary.RemainingPercent:0}%" + (resetTimeWindow == ResetTimeWindow.FiveHour
-                ? $" reset {snapshot.Primary.ResetsAt!.Value.LocalDateTime:HH:mm}"
+            ? $"5小时 {snapshot.Primary.RemainingPercent:0}%" + (resetTimeWindow == ResetTimeWindow.FiveHour
+                ? $" 重置 {snapshot.Primary.ResetsAt!.Value.LocalDateTime:HH:mm}"
                 : string.Empty)
             : string.Empty;
         var week = snapshot.Secondary.IsAvailable
-            ? $"Week {snapshot.Secondary.RemainingPercent:0}%" + (resetTimeWindow == ResetTimeWindow.Week && snapshot.Secondary.ResetsAt is not null
-                ? $" reset {snapshot.Secondary.ResetsAt.Value.LocalDateTime:MM/dd HH:mm}"
+            ? $"周 {snapshot.Secondary.RemainingPercent:0}%" + (resetTimeWindow == ResetTimeWindow.Week && snapshot.Secondary.ResetsAt is not null
+                ? $" 重置 {snapshot.Secondary.ResetsAt.Value.LocalDateTime:MM/dd HH:mm}"
                 : string.Empty)
             : string.Empty;
-        var resetCards = !hasFiveHourReset && source == "Codex" && snapshot.AvailableResetCredits is int credits
-            ? $"Cards {credits}"
+        var resetCards = !hasFiveHourReset && source == QuotaSource.Codex && snapshot.AvailableResetCredits is int credits
+            ? $"重置卡 {credits}"
             : string.Empty;
         var details = string.Join(" ", new[] { primary, week, resetCards }.Where(value => value.Length > 0));
-        var today = source == "Antigravity" && snapshot.LastSevenDays.Count == 0 ? "--" : FormatTokens(snapshot.TodayTokens);
-        var text = $"{source} {details} Today {today}";
+        var today = source == QuotaSource.Antigravity && snapshot.LastSevenDays.Count == 0 ? "--" : FormatTokens(snapshot.TodayTokens);
+        var text = $"{sourceName} {details} 今日 {today}";
         return text.Length <= 63 ? text : text[..63];
     }
 

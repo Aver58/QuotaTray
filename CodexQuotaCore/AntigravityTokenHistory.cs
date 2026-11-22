@@ -47,13 +47,13 @@ public sealed class AntigravityTokenHistory
         }
 
         if (!readable)
-            return snapshot with { TokenHistoryNotice = "No readable local token history." };
+            return snapshot with { TokenHistoryNotice = "暂无可读取的本地 Token 记录。" };
 
         return snapshot with
         {
             LastSevenDays = days.OrderBy(pair => pair.Key).Select(pair => new DailyTokenUsage(pair.Key, pair.Value)).ToArray(),
             TodayTokens = days[today],
-            TokenHistoryNotice = partial ? "Partial local history" : null
+            TokenHistoryNotice = partial ? "仅显示可读取的本地记录。" : null
         };
     }
 

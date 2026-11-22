@@ -42,7 +42,7 @@ public sealed class VolcanoAccountBalanceReader
                           error.TryGetProperty("Message", out var errorMessage)
                 ? errorMessage.GetString()
                 : response.ReasonPhrase;
-            throw new HttpRequestException($"Balance query failed ({(int)response.StatusCode}): {message}");
+            throw new HttpRequestException($"余额查询失败（HTTP {(int)response.StatusCode}）。{message}");
         }
 
         if (!document.RootElement.TryGetProperty("Result", out var result) ||
@@ -51,7 +51,7 @@ public sealed class VolcanoAccountBalanceReader
             !TryReadDecimal(available, out var availableBalance) ||
             !TryReadDecimal(cash, out var cashBalance))
         {
-            throw new InvalidDataException("Balance response did not contain valid AvailableBalance and CashBalance values.");
+            throw new InvalidDataException("余额响应缺少有效的可用余额或现金余额。");
         }
 
         return new VolcanoAccountBalance(availableBalance, cashBalance);
