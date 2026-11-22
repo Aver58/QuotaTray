@@ -1,0 +1,32 @@
+# .NET and editor output
+**/[Bb]in/
+**/[Oo]bj/
+.vs/
+.idea/
+*.user
+*.suo
+*.pdb
+
+# Local builds, research and browser captures
+dist/
+tmp/
+/outputs/
+/research/
+/working/
+/.playwright-cli/
+.wrangler/
+.dev.vars*
+
+# Machine settings, login state and usage records
+.env
+.env.*
+settings.json
+settings.json.tmp
+*.settings.local.json
+auth.json
+hub_*.json
+*.jsonl
+*.db
+*.db-shm
+*.db-wal
+*.log

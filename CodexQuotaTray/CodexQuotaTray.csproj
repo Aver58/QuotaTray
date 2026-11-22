@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <Version>0.3.0</Version>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\CodexQuotaCore\CodexQuotaCore.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="ApplyUpdate.ps1" LogicalName="CodexQuotaTray.ApplyUpdate.ps1" />
+  </ItemGroup>
+</Project>
