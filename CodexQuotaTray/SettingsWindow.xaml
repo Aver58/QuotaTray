@@ -79,7 +79,7 @@
             <StackPanel Margin="22,0,22,14">
                 <Border Style="{StaticResource Card}">
                     <StackPanel>
-                        <TextBlock Text="显示来源" Style="{StaticResource Section}"/>
+                        <TextBlock Text="托盘图标与账号" Style="{StaticResource Section}"/>
                         <UniformGrid Rows="1" Columns="3" Margin="-2,0">
                             <RadioButton x:Name="CodexSource" GroupName="Source" Content="Codex"/>
                             <RadioButton x:Name="VolcanoSource" GroupName="Source" Content="火山引擎"/>

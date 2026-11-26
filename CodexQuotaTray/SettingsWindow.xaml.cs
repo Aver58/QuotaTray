@@ -18,8 +18,7 @@ public partial class SettingsWindow : Window
         RefreshSecondsBox.Text = settings.RefreshSeconds.ToString(CultureInfo.InvariantCulture);
         TooltipResetWindowCombo.SelectedIndex = settings.TooltipResetWindow == ResetTimeWindow.Week ? 1 : 0;
         CodexHomeBox.Text = settings.CodexHome ?? string.Empty;
-        var hasKeys = !string.IsNullOrWhiteSpace(settings.VolcengineAccessKeyId)
-            && !string.IsNullOrWhiteSpace(settings.VolcengineSecretAccessKey);
+        var hasKeys = settings.HasVolcengineCredentials;
         ReplaceKeys.Visibility = hasKeys ? Visibility.Visible : Visibility.Collapsed;
         ReplaceKeys.IsChecked = !hasKeys;
         AddHandler(System.Windows.Controls.Primitives.ToggleButton.CheckedEvent,

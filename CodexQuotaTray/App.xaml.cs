@@ -2,6 +2,7 @@ using System.IO;
 using System.Net.Http;
 using System.Windows;
 using System.Windows.Forms;
+using System.Windows.Media;
 using System.Windows.Threading;
 using CodexQuotaCore;
 
@@ -9,13 +10,17 @@ namespace CodexQuotaTray;
 
 public partial class App : System.Windows.Application
 {
+    private static readonly QuotaSource[] Sources = [QuotaSource.Codex, QuotaSource.VolcengineAgentPlan, QuotaSource.Antigravity];
+    private static readonly CodexQuotaSnapshot Loading = CodexQuotaSnapshot.Empty("正在读取额度…");
+    private static readonly CodexQuotaSnapshot UnconfiguredVolcano = CodexQuotaSnapshot.Empty("点击此行，在设置中填写火山引擎访问密钥。");
+
     private TraySettings _settings = TraySettings.Load();
-    private CodexQuotaReader _codexReader;
     private readonly AgentPlanUsageReader _agentPlanUsageReader = new();
     private readonly VolcanoAccountBalanceReader _accountBalanceReader = new();
     private readonly AntigravityUsageReader _antigravityUsageReader = new();
     private readonly AntigravityTokenHistory _antigravityHistory = new();
-    private bool _readingAntigravity;
+    private readonly HashSet<QuotaSource> _reading = [];
+    private readonly Dictionary<QuotaSource, CodexQuotaSnapshot> _snapshots = [];
     private readonly DispatcherTimer _timer = new();
     private readonly DispatcherTimer _updateTimer = new() { Interval = TimeSpan.FromHours(6) };
     private readonly CancellationTokenSource _exit = new();
@@ -26,18 +31,17 @@ public partial class App : System.Windows.Application
     private ToolStripMenuItem? _codexSourceOption;
     private ToolStripMenuItem? _agentPlanSourceOption;
     private ToolStripMenuItem? _antigravitySourceOption;
+    private QuotaHud? _hud;
     private QuotaWindow? _window;
-    private CodexQuotaSnapshot _snapshot = CodexQuotaSnapshot.Empty("正在启动…");
-
-    public App()
-    {
-        _codexReader = new CodexQuotaReader(_settings.CodexHome);
-    }
+    private QuotaSource _detailSource;
+    private (int Percent, bool Available)? _trayReading;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
+        _hud = new QuotaHud();
+        _hud.DetailsRequested += source => ShowDetails(source, _hud);
         _window = new QuotaWindow();
         _window.RequestHide += (_, _) => _window.Hide();
 
@@ -48,9 +52,10 @@ public partial class App : System.Windows.Application
             ContextMenuStrip = BuildMenu()
         };
         _trayIcon.MouseClick += TrayIconOnMouseClick;
+        ApplyCachedSnapshots();
 
         _timer.Interval = TimeSpan.FromSeconds(_settings.RefreshSeconds);
-        _timer.Tick += (_, _) => RefreshSnapshot();
+        _timer.Tick += (_, _) => RefreshSnapshots();
         _timer.Start();
 
         _updateTimer.Tick += (_, _) => CheckForUpdate(manual: false);
@@ -61,7 +66,15 @@ public partial class App : System.Windows.Application
             using (ready) ready.Set();
         }
         CheckForUpdate(manual: false);
-        RefreshSnapshot();
+        if (e.Args is ["--show"])
+        {
+            _hud.IsPinned = true;
+            ShowHud();
+        }
+        else
+        {
+            RefreshSnapshots();
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -82,9 +95,9 @@ public partial class App : System.Windows.Application
     private ContextMenuStrip BuildMenu()
     {
         var menu = new ContextMenuStrip();
-        menu.Items.Add("打开面板", null, (_, _) => ShowPopup());
-        menu.Items.Add("立即刷新", null, (_, _) => RefreshSnapshot());
-        var displayOptions = new ToolStripMenuItem("显示来源");
+        menu.Items.Add("打开浮窗", null, (_, _) => ShowHud());
+        menu.Items.Add("立即刷新", null, (_, _) => RefreshSnapshots(all: true));
+        var displayOptions = new ToolStripMenuItem("托盘图标来源");
         _codexSourceOption = new ToolStripMenuItem("Codex")
         {
             Checked = _settings.Source == QuotaSource.Codex
@@ -122,8 +135,35 @@ public partial class App : System.Windows.Application
             catch (Exception ex) { System.Windows.MessageBox.Show(ex.Message, "无法保存自动更新设置"); }
         };
         menu.Items.Add(automatic);
+        menu.Items.Add("图标来源与许可", null, (_, _) => ShowProviderNotices());
         menu.Items.Add("退出", null, (_, _) => Shutdown());
         return menu;
+    }
+
+    private static void ShowProviderNotices()
+    {
+        using var resource = typeof(App).Assembly.GetManifestResourceStream("CodexQuotaTray.ProviderNotices.txt")!;
+        using var reader = new StreamReader(resource);
+        var text = new System.Windows.Controls.TextBox
+        {
+            IsReadOnly = true,
+            Text = reader.ReadToEnd(),
+            TextWrapping = TextWrapping.Wrap,
+            VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+            Padding = new Thickness(12),
+            FontSize = 13
+        };
+        var dialog = new Window
+        {
+            Title = "QuotaTray 图标来源与许可",
+            Content = text,
+            Width = 650,
+            Height = 500,
+            MaxHeight = SystemParameters.WorkArea.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            ShowInTaskbar = false
+        };
+        dialog.ShowDialog();
     }
 
     private async void CheckForUpdate(bool manual)
@@ -175,98 +215,213 @@ public partial class App : System.Windows.Application
     {
         if (e.Button == MouseButtons.Left)
         {
-            if (_window?.IsVisible == true)
+            if (_hud?.IsVisible == true)
             {
-                _window.Hide();
+                _hud.Hide();
             }
             else
             {
-                ShowPopup();
+                ShowHud();
             }
         }
     }
 
-    private void ShowPopup()
+    private void ShowHud()
     {
-        if (_window is null)
+        if (_hud is null)
         {
             return;
         }
 
-        _window.ApplySnapshot(_snapshot, _settings.Source);
-        _window.Show();
-        _window.Activate();
-
-        var workArea = SystemParameters.WorkArea;
-        _window.Left = Math.Max(workArea.Left + 12, workArea.Right - _window.Width - 24);
-        _window.Top = Math.Max(workArea.Top + 12, workArea.Bottom - _window.Height - 24);
+        _window?.Hide();
+        var firstShow = !_hud.IsLoaded;
+        _hud.Show();
+        _hud.RestorePosition(firstShow);
+        _hud.Activate();
+        RefreshSnapshots();
     }
 
-    private async void RefreshSnapshot()
+    private void ShowDetails(QuotaSource source, QuotaHud? anchor = null)
     {
+        if (_window is null || !EnsureSourceReady(source))
+        {
+            return;
+        }
+
+        _detailSource = source;
+        ApplyDetails();
+        if (anchor?.IsVisible == true)
+        {
+            var bounds = HudPlacement.Bounds(anchor);
+            var area = Screen.FromRectangle(bounds).WorkingArea;
+            var dpi = VisualTreeHelper.GetDpi(anchor);
+            var size = new System.Drawing.Size(
+                (int)Math.Round(_window.Width * dpi.DpiScaleX),
+                (int)Math.Round(_window.Height * dpi.DpiScaleY));
+            var gap = (int)Math.Round(8 * dpi.DpiScaleX);
+            _window.Show();
+            HudPlacement.Move(_window, HudPlacement.PlaceDetails(area, bounds, size, anchor.LayoutEdge, gap));
+            var current = HudPlacement.Bounds(_window).Size;
+            if (current != size)
+            {
+                HudPlacement.Move(_window, HudPlacement.PlaceDetails(area, bounds, current, anchor.LayoutEdge, gap));
+            }
+        }
+        else
+        {
+            var area = SystemParameters.WorkArea;
+            _window.Left = Math.Max(area.Left + 12, area.Right - _window.Width - 24);
+            _window.Top = Math.Max(area.Top + 12, area.Bottom - _window.Height - 24);
+            _window.Show();
+        }
+        _window.Activate();
+        RefreshSnapshots();
+    }
+
+    private void RefreshSnapshots(bool all = false)
+    {
+        if (all || _hud?.IsVisible == true)
+        {
+            foreach (var source in Sources)
+            {
+                RefreshSource(source);
+            }
+            return;
+        }
+
+        RefreshSource(_settings.Source);
+        if (_window?.IsVisible == true)
+        {
+            RefreshSource(_detailSource);
+            if (_detailSource == QuotaSource.VolcengineAgentPlan)
+            {
+                RefreshSource(QuotaSource.Codex);
+            }
+        }
+    }
+
+    private async void RefreshSource(QuotaSource source)
+    {
+        var settings = _settings;
+        if (_exit.IsCancellationRequested || (source == QuotaSource.VolcengineAgentPlan && !settings.HasVolcengineCredentials)
+            || !_reading.Add(source))
+        {
+            return;
+        }
+
+        CodexQuotaSnapshot snapshot;
         try
         {
-            if (_settings.Source == QuotaSource.Antigravity)
-            {
-                if (_readingAntigravity) return;
-                _readingAntigravity = true;
-                try
-                {
-                    var result = await System.Threading.Tasks.Task.Run(
-                        () => _antigravityHistory.AddTo(_antigravityUsageReader.ReadSnapshot()));
-                    if (_settings.Source != QuotaSource.Antigravity) return;
-                    _snapshot = result;
-                }
-                catch (Exception)
-                {
-                    if (_settings.Source != QuotaSource.Antigravity) return;
-                    _snapshot = CodexQuotaSnapshot.Empty("暂时无法获取 Antigravity 用量。");
-                }
-                finally { _readingAntigravity = false; }
-            }
-            else
-            {
-                var localUsage = _codexReader.ReadSnapshot(includeLiveQuota: _settings.Source == QuotaSource.Codex);
-                _snapshot = _settings.Source == QuotaSource.VolcengineAgentPlan
-                    ? _agentPlanUsageReader.ReadSnapshot(
-                        _settings.VolcengineAccessKeyId ?? string.Empty,
-                        _settings.VolcengineSecretAccessKey ?? string.Empty,
-                        localUsage)
-                    : localUsage;
-            }
-            if (_settings.Source == QuotaSource.VolcengineAgentPlan)
-            {
-                try
-                {
-                    _snapshot = _snapshot with
-                    {
-                        VolcanoBalance = _accountBalanceReader.Read(
-                            _settings.VolcengineAccessKeyId ?? string.Empty,
-                            _settings.VolcengineSecretAccessKey ?? string.Empty),
-                        VolcanoBalanceError = null
-                    };
-                }
-                catch (Exception balanceError) when (balanceError is HttpRequestException or IOException or System.Text.Json.JsonException or System.Security.Cryptography.CryptographicException or InvalidOperationException)
-                {
-                    _snapshot = _snapshot with { VolcanoBalance = null, VolcanoBalanceError = balanceError.Message };
-                }
-            }
+            snapshot = await Task.Run(() => ReadSource(source, settings), _exit.Token);
+        }
+        catch (OperationCanceledException) when (_exit.IsCancellationRequested)
+        {
+            return;
         }
         catch (Exception ex)
         {
-            _snapshot = CodexQuotaSnapshot.Empty(ex.Message);
+            snapshot = CodexQuotaSnapshot.Empty($"读取额度失败。{ex.Message}");
         }
-
-        if (_window?.IsVisible == true)
+        finally
         {
-            _window.ApplySnapshot(_snapshot, _settings.Source);
+            _reading.Remove(source);
         }
 
-        UpdateTrayIcon(_snapshot);
+        if (_exit.IsCancellationRequested)
+        {
+            return;
+        }
+        if (!SameQuotaInputs(source, settings, _settings))
+        {
+            RefreshSource(source);
+            return;
+        }
+
+        _snapshots[source] = snapshot;
+        _hud?.ApplySnapshot(source, snapshot);
+        if (source == _settings.Source)
+        {
+            UpdateTrayIcon(snapshot);
+        }
+        if (_window?.IsVisible == true &&
+            (source == _detailSource || (_detailSource == QuotaSource.VolcengineAgentPlan && source == QuotaSource.Codex)))
+        {
+            ApplyDetails();
+        }
     }
 
-    private void ShowSettings(QuotaSource? selected = null)
+    private CodexQuotaSnapshot ReadSource(QuotaSource source, TraySettings settings) =>
+        source switch
+        {
+            QuotaSource.VolcengineAgentPlan => ReadVolcano(settings),
+            QuotaSource.Antigravity => _antigravityHistory.AddTo(_antigravityUsageReader.ReadSnapshot()),
+            _ => new CodexQuotaReader(settings.CodexHome).ReadSnapshot()
+        };
+
+    private CodexQuotaSnapshot ReadVolcano(TraySettings settings)
     {
+        var id = settings.VolcengineAccessKeyId!;
+        var secret = settings.VolcengineSecretAccessKey!;
+        var snapshot = _agentPlanUsageReader.ReadSnapshot(id, secret, Loading);
+        try
+        {
+            return snapshot with { VolcanoBalance = _accountBalanceReader.Read(id, secret) };
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or System.Text.Json.JsonException
+                                   or System.Security.Cryptography.CryptographicException or InvalidOperationException or OperationCanceledException)
+        {
+            return snapshot with { VolcanoBalanceError = ex.Message };
+        }
+    }
+
+    private CodexQuotaSnapshot GetSnapshot(QuotaSource source)
+    {
+        if (source == QuotaSource.VolcengineAgentPlan && !_settings.HasVolcengineCredentials)
+        {
+            return UnconfiguredVolcano;
+        }
+        return _snapshots.GetValueOrDefault(source, Loading);
+    }
+
+    private void ApplyDetails()
+    {
+        var snapshot = GetSnapshot(_detailSource);
+        if (_detailSource == QuotaSource.VolcengineAgentPlan)
+        {
+            var codex = GetSnapshot(QuotaSource.Codex);
+            snapshot = snapshot with { TodayTokens = codex.TodayTokens, LastSevenDays = codex.LastSevenDays };
+        }
+        _window?.ApplySnapshot(snapshot, _detailSource);
+    }
+
+    private static bool SameQuotaInputs(QuotaSource source, TraySettings before, TraySettings after) =>
+        source switch
+        {
+            QuotaSource.Codex => before.CodexHome == after.CodexHome,
+            QuotaSource.VolcengineAgentPlan => before.VolcengineAccessKeyId == after.VolcengineAccessKeyId
+                && before.VolcengineSecretAccessKey == after.VolcengineSecretAccessKey,
+            _ => true
+        };
+
+    private void ApplyCachedSnapshots()
+    {
+        foreach (var source in Sources)
+        {
+            _hud?.ApplySnapshot(source, GetSnapshot(source));
+        }
+        UpdateTrayIcon(GetSnapshot(_settings.Source));
+        if (_window?.IsVisible == true)
+        {
+            ApplyDetails();
+        }
+    }
+
+    private bool ShowSettings(QuotaSource? selected = null)
+    {
+        if (_editingSettings)
+        {
+            return false;
+        }
         var settingsWindow = new SettingsWindow(selected.HasValue ? _settings with { Source = selected.Value } : _settings);
         _editingSettings = true;
         bool? saved;
@@ -274,83 +429,69 @@ public partial class App : System.Windows.Application
         finally { _editingSettings = false; }
         if (saved != true || settingsWindow.SavedSettings is not { } savedSettings)
         {
-            return;
+            return false;
         }
 
         try
         {
             savedSettings = savedSettings with { AutomaticUpdates = _settings.AutomaticUpdates };
             savedSettings.Save();
-            if (_settings.Source != savedSettings.Source) _snapshot = CodexQuotaSnapshot.Empty("正在读取额度…");
+            foreach (var source in Sources)
+            {
+                if (!SameQuotaInputs(source, _settings, savedSettings))
+                {
+                    _snapshots.Remove(source);
+                }
+            }
+
             _settings = savedSettings;
-            if (_codexSourceOption is not null)
-            {
-                _codexSourceOption.Checked = _settings.Source == QuotaSource.Codex;
-            }
-
-            if (_agentPlanSourceOption is not null)
-            {
-                _agentPlanSourceOption.Checked = _settings.Source == QuotaSource.VolcengineAgentPlan;
-            }
-
-            if (_antigravitySourceOption is not null)
-            {
-                _antigravitySourceOption.Checked = _settings.Source == QuotaSource.Antigravity;
-            }
-
-            _codexReader = new CodexQuotaReader(_settings.CodexHome);
+            UpdateSourceMenu();
             _timer.Interval = TimeSpan.FromSeconds(_settings.RefreshSeconds);
-            RefreshSnapshot();
+            ApplyCachedSnapshots();
+            RefreshSnapshots();
+            return true;
         }
         catch (Exception ex)
         {
             System.Windows.MessageBox.Show($"保存设置失败。{ex.Message}", "设置", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
         }
     }
 
+    private bool EnsureSourceReady(QuotaSource source) =>
+        source != QuotaSource.VolcengineAgentPlan || _settings.HasVolcengineCredentials
+        || (ShowSettings(source) && _settings.HasVolcengineCredentials);
+
     private void SwitchQuotaSource(QuotaSource source)
     {
-        if (source == QuotaSource.VolcengineAgentPlan &&
-            (string.IsNullOrWhiteSpace(_settings.VolcengineAccessKeyId) || string.IsNullOrWhiteSpace(_settings.VolcengineSecretAccessKey)))
-        {
-            ShowSettings(source);
-            if (_settings.Source == source && !string.IsNullOrWhiteSpace(_settings.VolcengineSecretAccessKey)) ShowPopup();
-            return;
-        }
-        if (_settings.Source == source)
+        if (!EnsureSourceReady(source))
         {
             return;
         }
-
-        var updatedSettings = _settings with { Source = source };
 
         try
         {
-            updatedSettings.Save();
-            _snapshot = CodexQuotaSnapshot.Empty("正在读取额度…");
-            _settings = updatedSettings;
-            if (_codexSourceOption is not null)
+            if (_settings.Source != source)
             {
-                _codexSourceOption.Checked = source == QuotaSource.Codex;
+                var updatedSettings = _settings with { Source = source };
+                updatedSettings.Save();
+                _settings = updatedSettings;
+                UpdateSourceMenu();
+                UpdateTrayIcon(GetSnapshot(source));
             }
-
-            if (_agentPlanSourceOption is not null)
-            {
-                _agentPlanSourceOption.Checked = source == QuotaSource.VolcengineAgentPlan;
-            }
-
-            if (_antigravitySourceOption is not null)
-            {
-                _antigravitySourceOption.Checked = source == QuotaSource.Antigravity;
-            }
-
-            RefreshSnapshot();
-            ShowPopup();
+            ShowDetails(source);
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show($"切换来源失败。{ex.Message}", "显示来源", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show($"切换来源失败。{ex.Message}", "托盘图标来源", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private void UpdateSourceMenu()
+    {
+        _codexSourceOption!.Checked = _settings.Source == QuotaSource.Codex;
+        _agentPlanSourceOption!.Checked = _settings.Source == QuotaSource.VolcengineAgentPlan;
+        _antigravitySourceOption!.Checked = _settings.Source == QuotaSource.Antigravity;
     }
 
     private void UpdateTrayIcon(CodexQuotaSnapshot snapshot)
@@ -361,12 +502,14 @@ public partial class App : System.Windows.Application
         }
 
         var displayBucket = snapshot.Primary.IsAvailable ? snapshot.Primary : snapshot.Secondary;
-        var oldIcon = _trayIcon.Icon;
-        _trayIcon.Icon = TrayIconFactory.Create(
-            (int)Math.Round(displayBucket.RemainingPercent),
-            displayBucket.IsAvailable
-        );
-        oldIcon?.Dispose();
+        var reading = (Percent: (int)Math.Round(displayBucket.RemainingPercent), Available: displayBucket.IsAvailable);
+        if (_trayReading != reading)
+        {
+            var oldIcon = _trayIcon.Icon;
+            _trayIcon.Icon = TrayIconFactory.Create(reading.Percent, reading.Available);
+            _trayReading = reading;
+            oldIcon?.Dispose();
+        }
 
         _trayIcon.Text = BuildTooltip(snapshot, _settings.TooltipResetWindow, _settings.Source);
     }

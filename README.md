@@ -1,12 +1,12 @@
 # CodexQuotaTray
 
-Windows 11 的任务栏托盘额度组件。左键打开面板，右键通过 **显示来源** 切换 Codex、火山引擎 Agent Plan 或 Antigravity。组件会记住上次选择的来源。
+Windows 11 的任务栏托盘额度组件。左键打开三行浮窗，同时查看 Codex、火山引擎 Agent Plan 和 Antigravity。右键通过 **托盘图标来源** 选择任务栏图标和提示显示的服务。
 
 ## 下载和运行
 
 1. 在 [Cloudflare 下载页](https://codex-quota-tray-aver58.pages.dev/) 下载 Windows x64 便携包并解压。
 2. 双击 `CodexQuotaTray.exe`。便携包已包含 .NET 运行时。
-3. 在系统托盘中左键单击图标查看额度。按住面板可拖动，点击其他窗口或面板的关闭按钮即可收起。要退出程序，在托盘右键菜单中选择 **退出**。
+3. 左键单击托盘图标打开浮窗。悬停圆环可看额度口径和重置时间，点击可看详情。拖住浮窗上的短线移到屏幕边沿即可吸附，右键也可选择贴靠方向或 **固定在桌面**。要退出程序，在托盘右键菜单中选择 **退出**。
 
 换电脑时，在目标电脑登录对应服务，或在 **设置** 配置火山引擎。需要登录 Windows 后自动启动时，将程序快捷方式放入 `shell:startup` 文件夹。
 
@@ -18,11 +18,15 @@ v0.3.0 起，组件通过 HTTPS 匿名读取 Cloudflare 上的稳定版清单，
 
 ## 每个用户配置自己的账号
 
-- **火山引擎**：右键托盘，选择 **显示来源 → 火山引擎 · Agent Plan**。首次使用会打开设置，在 **Access Key ID** 和 **Secret Access Key** 填入自己的 IAM 密钥并保存。下次打开设置将隐藏已有密钥，勾选「更换已保存的密钥」可更新。额度查询需要 Ark Agent Plan 读取权限，账户余额需要 `billing:QueryBalanceAcct`。
+- **火山引擎**：点击浮窗中的火山引擎一行，首次使用会打开设置。在 **Access Key ID** 和 **Secret Access Key** 填入自己的 IAM 密钥并保存。下次打开设置将隐藏已有密钥，勾选「更换已保存的密钥」可更新。额度查询需要 Ark Agent Plan 读取权限，账户余额需要 `billing:QueryBalanceAcct`。
 - **Codex 与 Antigravity**：在这台电脑上登录各自客户端。Antigravity 的实时额度需要桌面端正在运行。
 - **存储与传输**：个人设置存于 `%LOCALAPPDATA%\CodexQuotaTray\settings.json`。Access Key ID 以明文保存，Secret 由当前 Windows 用户的 DPAPI 加密。火山引擎请求在本机签名；Cloudflare 更新站仅提供版本清单和程序包。分享时只拷贝便携 ZIP 或 EXE。
 
 ## 可以查看什么
+
+浮窗优先显示 5 小时剩余额度，缺失时显示周额度。火山引擎还可显示日、月额度作为补充。Antigravity 取同一周期中剩余额度较低的模型组，悬停可查看模型组名称。
+
+圆环和百分比按额度状态变色。用量达到 70% 时为黄色，达到 90% 时为红色，其他可用读数为绿色。图标和配色的出处见[图标来源与许可](CodexQuotaTray/Assets/Providers/NOTICE.txt)。
 
 | 来源 | 额度面板 | 数据来源 |
 | --- | --- | --- |

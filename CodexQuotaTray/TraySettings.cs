@@ -30,6 +30,9 @@ internal sealed record TraySettings(
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
+    public bool HasVolcengineCredentials =>
+        !string.IsNullOrWhiteSpace(VolcengineAccessKeyId) && !string.IsNullOrWhiteSpace(VolcengineSecretAccessKey);
+
     public static string SettingsPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "CodexQuotaTray",
@@ -58,7 +61,7 @@ internal sealed record TraySettings(
                 PropertyNameCaseInsensitive = true
             });
 
-            var source = Enum.TryParse<QuotaSource>(dto?.Source, true, out var parsedSource)
+            var source = Enum.TryParse<QuotaSource>(dto?.Source, true, out var parsedSource) && Enum.IsDefined(parsedSource)
                 ? parsedSource
                 : QuotaSource.Codex;
             var tooltipResetWindow = Enum.TryParse<ResetTimeWindow>(dto?.TooltipResetWindow, true, out var parsedResetWindow)

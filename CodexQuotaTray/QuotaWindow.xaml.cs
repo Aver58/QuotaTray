@@ -27,14 +27,15 @@ public partial class QuotaWindow : Window
         var primaryRemaining = Math.Clamp(snapshot.Primary.RemainingPercent, 0, 100);
         var dailyRemaining = Math.Clamp(snapshot.Daily.RemainingPercent, 0, 100);
         var monthlyRemaining = Math.Clamp(snapshot.Monthly.RemainingPercent, 0, 100);
-        var showResetCards = !snapshot.Primary.IsAvailable && snapshot.AvailableResetCredits.HasValue;
+        var showResetCards = source == QuotaSource.Codex && snapshot.AvailableResetCredits.HasValue
+                             && snapshot.Primary.ResetsAt is null;
 
         SourceTitleText.Text = isAgentPlan ? "火山引擎" : isAntigravity ? "Antigravity" : "Codex";
         Height = isAntigravity ? 410 : isAgentPlan ? 460 : 360;
         if (wasVisible && Math.Abs(previousHeight - Height) > 0.1)
         {
             var workArea = SystemParameters.WorkArea;
-            Top = Math.Clamp(Top + previousHeight - Height, workArea.Top + 12, workArea.Bottom - Height - 12);
+            Top = Math.Max(workArea.Top + 12, Math.Min(Top + previousHeight - Height, workArea.Bottom - Height - 12));
         }
         ModelUsage.Visibility = isAntigravity ? Visibility.Visible : Visibility.Collapsed;
         StandardQuotaPanel.Visibility = HistoryPanel.Visibility = isAntigravity ? Visibility.Collapsed : Visibility.Visible;
