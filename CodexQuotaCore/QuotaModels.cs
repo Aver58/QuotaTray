@@ -17,6 +17,8 @@ public sealed record QuotaBucket(
 
 public sealed record DailyTokenUsage(DateOnly Date, long TotalTokens);
 
+public sealed record TimedTokenUsage(DateTimeOffset Start, DateTimeOffset End, long TotalTokens);
+
 public sealed record CodexQuotaSnapshot(
     DateTimeOffset? LatestEventAt,
     QuotaBucket Primary,
@@ -33,6 +35,8 @@ public sealed record CodexQuotaSnapshot(
     string? TokenHistoryNotice = null
 )
 {
+    public IReadOnlyList<TimedTokenUsage> Last24Hours { get; init; } = Array.Empty<TimedTokenUsage>();
+
     public static CodexQuotaSnapshot Empty(string status, string sourcePath = "") =>
         new(
             null,

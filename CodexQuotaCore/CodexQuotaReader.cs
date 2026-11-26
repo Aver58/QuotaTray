@@ -20,6 +20,7 @@ public sealed class CodexQuotaReader
     {
         var localNow = TimeZoneInfo.ConvertTime(now ?? DateTimeOffset.UtcNow, _localTimeZone);
         var dayTotals = SeedLastSevenDays(DateOnly.FromDateTime(localNow.DateTime));
+        var recent = new RecentTokenUsage(localNow);
         var latest = default(TokenCountEvent);
         var latestFiveHour = default(QuotaSample);
         var latestWeek = default(QuotaSample);
@@ -36,6 +37,7 @@ public sealed class CodexQuotaReader
                 {
                     dayTotals[eventDate] += tokenEvent.LastTotalTokens;
                 }
+                recent.Add(tokenEvent.Timestamp.ToUnixTimeSeconds(), tokenEvent.LastTotalTokens);
 
                 if (latest is null || tokenEvent.Timestamp > latest.Timestamp)
                 {
@@ -103,7 +105,10 @@ public sealed class CodexQuotaReader
             orderedDays,
             source,
             status
-        );
+        )
+        {
+            Last24Hours = latest is null ? Array.Empty<TimedTokenUsage>() : recent.GetIntervals()
+        };
     }
 
     private static string ResolveCodexHome(string? codexHome)

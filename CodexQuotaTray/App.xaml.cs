@@ -34,6 +34,8 @@ public partial class App : System.Windows.Application
     private QuotaHud? _hud;
     private QuotaWindow? _window;
     private QuotaSource _detailSource;
+    private QuotaHud? _detailAnchor;
+    private bool _placingDetails;
     private (int Percent, bool Available)? _trayReading;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -44,6 +46,28 @@ public partial class App : System.Windows.Application
         _hud.DetailsRequested += source => ShowDetails(source, _hud);
         _window = new QuotaWindow();
         _window.RequestHide += (_, _) => _window.Hide();
+        _hud.LocationChanged += (_, _) => PlaceAttachedDetails();
+        _hud.SizeChanged += (_, _) => PlaceAttachedDetails();
+        _hud.Deactivated += (_, _) => QueueDetailDismissal();
+        _hud.ContextMenu.Closed += (_, _) => QueueDetailDismissal();
+        _hud.IsVisibleChanged += (_, _) =>
+        {
+            if (!_hud.IsVisible && _detailAnchor == _hud)
+            {
+                _window.Hide();
+            }
+        };
+        _window.SizeChanged += (_, _) => PlaceAttachedDetails();
+        _window.Deactivated += (_, _) => QueueDetailDismissal();
+        _window.IsVisibleChanged += (_, _) =>
+        {
+            if (!_window.IsVisible)
+            {
+                var anchor = _detailAnchor;
+                _detailAnchor = null;
+                anchor?.SetDetailsOpen(false);
+            }
+        };
 
         _trayIcon = new NotifyIcon
         {
@@ -249,34 +273,75 @@ public partial class App : System.Windows.Application
         }
 
         _detailSource = source;
+        _detailAnchor = anchor?.IsVisible == true ? anchor : null;
+        _window.IsAttached = _detailAnchor is not null;
+        _hud?.SetDetailsOpen(_window.IsAttached);
         ApplyDetails();
-        if (anchor?.IsVisible == true)
+        var area = SystemParameters.WorkArea;
+        if (!_window.IsAttached)
         {
-            var bounds = HudPlacement.Bounds(anchor);
-            var area = Screen.FromRectangle(bounds).WorkingArea;
-            var dpi = VisualTreeHelper.GetDpi(anchor);
-            var size = new System.Drawing.Size(
-                (int)Math.Round(_window.Width * dpi.DpiScaleX),
-                (int)Math.Round(_window.Height * dpi.DpiScaleY));
-            var gap = (int)Math.Round(8 * dpi.DpiScaleX);
+            _window.Fit(area.Width - 24, area.Height - 24);
+        }
+        if (!_window.IsVisible)
+        {
+            _window.Opacity = 0;
             _window.Show();
-            HudPlacement.Move(_window, HudPlacement.PlaceDetails(area, bounds, size, anchor.LayoutEdge, gap));
-            var current = HudPlacement.Bounds(_window).Size;
-            if (current != size)
-            {
-                HudPlacement.Move(_window, HudPlacement.PlaceDetails(area, bounds, current, anchor.LayoutEdge, gap));
-            }
+        }
+        if (_window.IsAttached)
+        {
+            PlaceAttachedDetails();
         }
         else
         {
-            var area = SystemParameters.WorkArea;
-            _window.Left = Math.Max(area.Left + 12, area.Right - _window.Width - 24);
-            _window.Top = Math.Max(area.Top + 12, area.Bottom - _window.Height - 24);
-            _window.Show();
+            _window.UpdateLayout();
+            _window.Left = Math.Max(area.Left + 12, area.Right - _window.ActualWidth - 24);
+            _window.Top = Math.Max(area.Top + 12, area.Bottom - _window.ActualHeight - 24);
         }
+        _window.Opacity = 1;
         _window.Activate();
         RefreshSnapshots();
     }
+
+    private void PlaceAttachedDetails()
+    {
+        if (_placingDetails || _detailAnchor is not { IsVisible: true } anchor || _window is not { IsVisible: true } detail)
+        {
+            return;
+        }
+
+        _placingDetails = true;
+        try
+        {
+            var bounds = anchor.PanelBounds();
+            var workArea = Screen.FromRectangle(bounds).WorkingArea;
+            var dpi = VisualTreeHelper.GetDpi(anchor);
+            var gap = (int)Math.Round(5 * dpi.DpiScaleX);
+            detail.Fit(HudPlacement.SpaceForDetails(workArea, bounds, anchor.LayoutEdge, gap), dpi);
+            detail.UpdateLayout();
+            var expectedSize = new System.Drawing.Size(
+                (int)Math.Round(detail.ActualWidth * dpi.DpiScaleX),
+                (int)Math.Round(detail.ActualHeight * dpi.DpiScaleY));
+            HudPlacement.Move(detail, HudPlacement.PlaceDetails(workArea, bounds, expectedSize, anchor.LayoutEdge, gap));
+            var currentSize = HudPlacement.Bounds(detail).Size;
+            if (currentSize != expectedSize)
+            {
+                HudPlacement.Move(detail, HudPlacement.PlaceDetails(workArea, bounds, currentSize, anchor.LayoutEdge, gap));
+            }
+        }
+        finally
+        {
+            _placingDetails = false;
+        }
+    }
+
+    private void QueueDetailDismissal() => Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+    {
+        if (_window is { IsVisible: true, IsActive: false } && _detailAnchor?.IsActive != true &&
+            _detailAnchor?.ContextMenu?.IsOpen != true)
+        {
+            _window.Hide();
+        }
+    });
 
     private void RefreshSnapshots(bool all = false)
     {
@@ -389,7 +454,13 @@ public partial class App : System.Windows.Application
         if (_detailSource == QuotaSource.VolcengineAgentPlan)
         {
             var codex = GetSnapshot(QuotaSource.Codex);
-            snapshot = snapshot with { TodayTokens = codex.TodayTokens, LastSevenDays = codex.LastSevenDays };
+            snapshot = snapshot with
+            {
+                TodayTokens = codex.TodayTokens,
+                LastSevenDays = codex.LastSevenDays,
+                Last24Hours = codex.Last24Hours,
+                TokenHistoryNotice = codex.TokenHistoryNotice
+            };
         }
         _window?.ApplySnapshot(snapshot, _detailSource);
     }

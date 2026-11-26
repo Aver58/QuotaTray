@@ -55,6 +55,23 @@ internal static class HudPlacement
         });
     }
 
+    internal static Size SpaceForDetails(Rectangle area, Rectangle anchor, HudEdge edge, int gap) =>
+        edge switch
+        {
+            HudEdge.Left => new Size(Math.Max(1, area.Right - anchor.Right - gap), area.Height),
+            HudEdge.Right => new Size(Math.Max(1, anchor.Left - area.Left - gap), area.Height),
+            HudEdge.Top => new Size(area.Width, Math.Max(1, area.Bottom - anchor.Bottom - gap)),
+            _ => new Size(area.Width, Math.Max(1, anchor.Top - area.Top - gap))
+        };
+
+    internal static Point ResizeInward(Rectangle area, Rectangle anchor, Size size, HudEdge edge) =>
+        Clamp(area, size, edge switch
+        {
+            HudEdge.Right => new Point(anchor.Right - size.Width, anchor.Top),
+            HudEdge.Bottom => new Point(anchor.Left, anchor.Bottom - size.Height),
+            _ => anchor.Location
+        });
+
     private static Point Clamp(Rectangle area, Size size, Point position) => new(
         Math.Max(area.Left, Math.Min(position.X, area.Right - size.Width)),
         Math.Max(area.Top, Math.Min(position.Y, area.Bottom - size.Height)));

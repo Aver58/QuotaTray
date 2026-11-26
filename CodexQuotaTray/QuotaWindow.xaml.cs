@@ -1,163 +1,203 @@
-using System.Globalization;
 using System.Windows;
-using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using CodexQuotaCore;
+using DrawingSize = System.Drawing.Size;
 
 namespace CodexQuotaTray;
 
 public partial class QuotaWindow : Window
 {
-    private const double BarWidth = 238;
+    private const double PreferredWidth = 480;
+    private CodexQuotaSnapshot? _snapshot;
 
     public QuotaWindow()
     {
         InitializeComponent();
     }
 
+    internal bool IsAttached { get; set; }
     public event EventHandler? RequestHide;
+
+    internal void Fit(DrawingSize area, DpiScale dpi)
+    {
+        Fit(area.Width / dpi.DpiScaleX, area.Height / dpi.DpiScaleY);
+    }
+
+    internal void Fit(double width, double height)
+    {
+        MaxWidth = Math.Max(1, width);
+        MaxHeight = Math.Max(1, height);
+        Width = Math.Min(PreferredWidth, MaxWidth);
+    }
 
     internal void ApplySnapshot(CodexQuotaSnapshot snapshot, QuotaSource source)
     {
-        var previousHeight = Height;
-        var wasVisible = IsVisible;
-        var isAgentPlan = source == QuotaSource.VolcengineAgentPlan;
-        var isAntigravity = source == QuotaSource.Antigravity;
-        var secondaryRemaining = Math.Clamp(snapshot.Secondary.RemainingPercent, 0, 100);
-        var primaryRemaining = Math.Clamp(snapshot.Primary.RemainingPercent, 0, 100);
-        var dailyRemaining = Math.Clamp(snapshot.Daily.RemainingPercent, 0, 100);
-        var monthlyRemaining = Math.Clamp(snapshot.Monthly.RemainingPercent, 0, 100);
-        var showResetCards = source == QuotaSource.Codex && snapshot.AvailableResetCredits.HasValue
-                             && snapshot.Primary.ResetsAt is null;
+        _snapshot = snapshot;
+        var appearance = ProviderAppearance.For(source);
+        SourceTitleText.Text = appearance.Name;
+        SourceIcon.Source = appearance.Icon;
+        QuotaHeading.Text = source == QuotaSource.VolcengineAgentPlan ? "Agent Plan · AFP" : "额度";
+        QuotaRows.ItemsSource = MakeQuotaRows(snapshot, source);
 
-        SourceTitleText.Text = isAgentPlan ? "火山引擎" : isAntigravity ? "Antigravity" : "Codex";
-        Height = isAntigravity ? 410 : isAgentPlan ? 460 : 360;
-        if (wasVisible && Math.Abs(previousHeight - Height) > 0.1)
+        var volcano = source == QuotaSource.VolcengineAgentPlan;
+        VolcanoBalancePanel.Visibility = volcano ? Visibility.Visible : Visibility.Collapsed;
+        if (volcano)
         {
-            var workArea = SystemParameters.WorkArea;
-            Top = Math.Max(workArea.Top + 12, Math.Min(Top + previousHeight - Height, workArea.Bottom - Height - 12));
+            AvailableBalanceText.Text = snapshot.VolcanoBalance is { } balance
+                ? $"可用余额 {balance.AvailableBalance:N2} {balance.Currency}"
+                : "可用余额 —";
+            CashBalanceText.Text = snapshot.VolcanoBalance is { } cash
+                ? $"现金余额 {cash.CashBalance:N2} {cash.Currency}"
+                : "现金余额 —";
+            BalanceErrorText.Text = snapshot.VolcanoBalanceError;
+            BalanceErrorText.ToolTip = snapshot.VolcanoBalanceError;
+            BalanceErrorText.Visibility = string.IsNullOrEmpty(snapshot.VolcanoBalanceError)
+                ? Visibility.Collapsed : Visibility.Visible;
         }
-        ModelUsage.Visibility = isAntigravity ? Visibility.Visible : Visibility.Collapsed;
-        StandardQuotaPanel.Visibility = HistoryPanel.Visibility = isAntigravity ? Visibility.Collapsed : Visibility.Visible;
-        var status = snapshot.LatestEventAt is null
-            ? snapshot.Status
-            : $"更新于 {snapshot.LatestEventAt.Value.LocalDateTime:MM/dd HH:mm}  {snapshot.Status}";
-        if (isAntigravity)
-        {
-            ModelUsage.Apply(snapshot, status);
-            return;
-        }
-        AgentPlanExtraWindows.Visibility = isAgentPlan ? Visibility.Visible : Visibility.Collapsed;
-        DailyQuotaPanel.Visibility = snapshot.Daily.IsAvailable ? Visibility.Visible : Visibility.Collapsed;
-        MonthlyQuotaPanel.Visibility = snapshot.Monthly.IsAvailable ? Visibility.Visible : Visibility.Collapsed;
-        VolcanoBalancePanel.Visibility = isAgentPlan ? Visibility.Visible : Visibility.Collapsed;
-        AvailableBalanceText.Text = snapshot.VolcanoBalance is { } accountBalance
-            ? $"可用余额 {accountBalance.AvailableBalance:N2} {accountBalance.Currency}"
-            : "可用余额 暂不可用";
-        CashBalanceText.Text = snapshot.VolcanoBalance is { } cashBalance
-            ? $"现金余额 {cashBalance.CashBalance:N2} {cashBalance.Currency}"
-            : "现金余额 暂不可用";
-        BalanceErrorText.Text = snapshot.VolcanoBalanceError ?? string.Empty;
-        BalanceErrorText.Visibility = snapshot.VolcanoBalanceError is null ? Visibility.Collapsed : Visibility.Visible;
-        PrimaryLabelText.Text = showResetCards ? "重置卡" : "5 小时";
-        PrimaryPercentText.Text = showResetCards
-            ? snapshot.AvailableResetCredits!.Value.ToString(CultureInfo.InvariantCulture)
-            : snapshot.Primary.IsAvailable ? $"{primaryRemaining:0}%" : "--";
-        PrimaryProgressDetails.Visibility = showResetCards ? Visibility.Collapsed : Visibility.Visible;
-        SecondaryPercentText.Text = snapshot.Secondary.IsAvailable ? $"{secondaryRemaining:0}%" : "--";
-        DailyPercentText.Text = snapshot.Daily.IsAvailable ? $"{dailyRemaining:0}%" : "--";
-        MonthlyPercentText.Text = snapshot.Monthly.IsAvailable ? $"{monthlyRemaining:0}%" : "--";
-        PrimaryFill.Width = snapshot.Primary.IsAvailable ? BarWidth * primaryRemaining / 100.0 : 0;
-        SecondaryFill.Width = snapshot.Secondary.IsAvailable ? BarWidth * secondaryRemaining / 100.0 : 0;
-        DailyFill.Width = snapshot.Daily.IsAvailable ? BarWidth * dailyRemaining / 100.0 : 0;
-        MonthlyFill.Width = snapshot.Monthly.IsAvailable ? BarWidth * monthlyRemaining / 100.0 : 0;
 
-        PrimaryResetText.Text = FormatReset(snapshot.Primary);
-        SecondaryResetText.Text = FormatReset(snapshot.Secondary);
-        DailyResetText.Text = FormatReset(snapshot.Daily);
-        MonthlyResetText.Text = FormatReset(snapshot.Monthly);
-        TodayTokensText.Text = $"今日用量 {FormatTokens(snapshot.TodayTokens)} Token";
-        Chart.Items = snapshot.LastSevenDays;
-        ClockText.Text = DateTime.Now.ToString("HH:mm", CultureInfo.InvariantCulture);
+        ChartTitleText.Text = volcano ? "Codex 本机 Token 用量" : "Token 用量";
+        var status = string.IsNullOrEmpty(snapshot.TokenHistoryNotice)
+            ? snapshot.Status : $"{snapshot.Status} · {snapshot.TokenHistoryNotice}";
         StatusText.Text = status;
         StatusText.ToolTip = status;
+        UpdatedText.Text = snapshot.LatestEventAt is { } at ? $"更新 {at.LocalDateTime:MM/dd HH:mm}" : "";
+        UpdateChart();
     }
 
-    private void CloseButton_OnClick(object sender, RoutedEventArgs e)
+    private void Range_OnChecked(object sender, RoutedEventArgs e)
     {
-        RequestHide?.Invoke(this, EventArgs.Empty);
+        if (_snapshot is not null)
+        {
+            Chart.ClearHover();
+            UpdateChart();
+        }
     }
 
-    private void Window_OnPreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    private void UpdateChart()
     {
-        if (e.ChangedButton != System.Windows.Input.MouseButton.Left || IsInsideButton(e.OriginalSource as DependencyObject))
+        if (_snapshot is not { } snapshot)
         {
             return;
         }
 
+        var week = WeekRange.IsChecked == true;
+        TokenChartBar[] points = week
+            ? snapshot.LastSevenDays.Select(day => new TokenChartBar(
+                $"{day.Date:yyyy/MM/dd}", $"{day.Date:MM/dd}", day.TotalTokens)).ToArray()
+            : snapshot.Last24Hours.Select((slot, index) => new TokenChartBar(
+                FormatPeriod(slot), index % 24 == 0 ? $"{slot.Start.LocalDateTime:HH:mm}" : null, slot.TotalTokens)).ToArray();
+        Chart.SetItems(points);
+        ChartSummaryText.Text = points.Length == 0
+            ? "本地会话记录"
+            : $"{FormatTokens(points.Sum(point => (decimal)point.Tokens))} Token · " +
+              (week ? "按天" : "每 15 分钟一柱") +
+              $" · 今日 {FormatTokens(snapshot.TodayTokens)}";
+    }
+
+    private static string FormatPeriod(TimedTokenUsage slot)
+    {
+        var start = slot.Start.ToLocalTime();
+        var end = slot.End.ToLocalTime();
+        if (start.Offset != end.Offset)
+        {
+            return $"{start:MM/dd HH:mm zzz} – {end:MM/dd HH:mm zzz}";
+        }
+        return start.Date == end.Date
+            ? $"{start:MM/dd HH:mm} – {end:HH:mm}"
+            : $"{start:MM/dd HH:mm} – {end:MM/dd HH:mm}";
+    }
+
+    private static IReadOnlyList<QuotaRow> MakeQuotaRows(CodexQuotaSnapshot snapshot, QuotaSource source)
+    {
+        if (source == QuotaSource.Antigravity)
+        {
+            return
+            [
+                QuotaRow.For("Gemini · 5 小时", snapshot.Primary),
+                QuotaRow.For("Gemini · 周", snapshot.Secondary),
+                QuotaRow.For("Claude + GPT · 5 小时", snapshot.Daily),
+                QuotaRow.For("Claude + GPT · 周", snapshot.Monthly)
+            ];
+        }
+
+        var rows = new List<QuotaRow>(4);
+        if (source == QuotaSource.Codex && snapshot.Primary.ResetsAt is null && snapshot.AvailableResetCredits is int cards)
+        {
+            rows.Add(new QuotaRow("重置卡", "—", $"{cards} 张", "—", 0,
+                ProviderAppearance.StatusBrush(null), null));
+        }
+        else if (snapshot.Primary.IsAvailable)
+        {
+            rows.Add(QuotaRow.For("5 小时额度", snapshot.Primary));
+        }
+        if (snapshot.Secondary.IsAvailable || rows.Count == 0)
+        {
+            rows.Add(QuotaRow.For("周额度", snapshot.Secondary));
+        }
+        if (source == QuotaSource.VolcengineAgentPlan)
+        {
+            if (snapshot.Daily.IsAvailable)
+            {
+                rows.Add(QuotaRow.For("日额度", snapshot.Daily));
+            }
+            if (snapshot.Monthly.IsAvailable)
+            {
+                rows.Add(QuotaRow.For("月额度", snapshot.Monthly));
+            }
+        }
+        return rows;
+    }
+
+    private void CloseButton_OnClick(object sender, RoutedEventArgs e) => RequestHide?.Invoke(this, EventArgs.Empty);
+
+    private void Window_OnPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            RequestHide?.Invoke(this, EventArgs.Empty);
+            e.Handled = true;
+        }
+    }
+
+    private void Header_OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (IsAttached || e.LeftButton != MouseButtonState.Pressed)
+        {
+            return;
+        }
         try
         {
             DragMove();
         }
         catch (InvalidOperationException)
         {
-            // The drag can be canceled if the window loses capture while starting.
+            // Capture can be lost before Windows starts the drag.
         }
     }
 
-    private void Window_OnDeactivated(object? sender, EventArgs e)
+    private static string FormatTokens(decimal tokens) => tokens switch
     {
-        Hide();
-    }
+        >= 1_000_000 => $"{tokens / 1_000_000:0.##}M",
+        >= 1_000 => $"{tokens / 1_000:0.#}K",
+        _ => $"{tokens:0}"
+    };
 
-    private static bool IsInsideButton(DependencyObject? element)
+    private sealed record QuotaRow(
+        string Name, string Used, string Remaining, string Reset, double RemainingFraction,
+        SolidColorBrush Tone, string? Note)
     {
-        while (element is not null)
+        internal static QuotaRow For(string name, QuotaBucket bucket)
         {
-            if (element is System.Windows.Controls.Primitives.ButtonBase)
-            {
-                return true;
-            }
-
-            element = VisualTreeHelper.GetParent(element);
+            var available = bucket.IsAvailable && double.IsFinite(bucket.RemainingPercent) && double.IsFinite(bucket.UsedPercent);
+            var fraction = available ? Math.Clamp(bucket.RemainingPercent / 100, 0, 1) : (double?)null;
+            var note = bucket.TotalAmount is { } total && bucket.UsedAmount is { } used && bucket.Unit is { } unit
+                ? $"剩余 {Math.Max(0, total - used):0.##} / {total:0.##} {unit}" : null;
+            return new QuotaRow(name,
+                available ? $"{Math.Clamp(bucket.UsedPercent, 0, 100):0.#}%" : "—",
+                fraction is { } remaining ? $"{remaining * 100:0.#}%" : "—",
+                bucket.ResetsAt is { } reset ? $"{reset.LocalDateTime:MM/dd HH:mm}" : "—",
+                fraction.GetValueOrDefault(), ProviderAppearance.StatusBrush(fraction), note);
         }
-
-        return false;
-    }
-
-    private static string FormatReset(QuotaBucket bucket)
-    {
-        if (!bucket.IsAvailable)
-        {
-            return "当前来源未提供";
-        }
-
-        var amount = bucket.TotalAmount is double total && bucket.UsedAmount is double used && !string.IsNullOrWhiteSpace(bucket.Unit)
-            ? $"{FormatQuotaAmount(Math.Max(0, total - used))}/{FormatQuotaAmount(total)} {bucket.Unit} · "
-            : string.Empty;
-        if (bucket.ResetsAt is null)
-        {
-            return $"{amount}重置 --";
-        }
-
-        return $"{amount}重置 {bucket.ResetsAt.Value.LocalDateTime:MM/dd HH:mm}";
-    }
-
-    private static string FormatQuotaAmount(double amount) =>
-        amount.ToString("0.##", CultureInfo.InvariantCulture);
-
-    private static string FormatTokens(long tokens)
-    {
-        if (tokens >= 1_000_000)
-        {
-            return $"{tokens / 1_000_000.0:0.##}M";
-        }
-
-        if (tokens >= 1_000)
-        {
-            return $"{tokens / 1_000.0:0.#}K";
-        }
-
-        return tokens.ToString("0", CultureInfo.InvariantCulture);
     }
 }

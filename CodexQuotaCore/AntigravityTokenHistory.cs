@@ -6,14 +6,18 @@ namespace CodexQuotaCore;
 public sealed class AntigravityTokenHistory
 {
     private readonly Dictionary<string, FileSummary> _cache = new(StringComparer.OrdinalIgnoreCase);
-    private sealed record FileSummary((long, long, long, long) Stamp, Dictionary<DateOnly, long> Days, bool Partial);
+    private sealed record FileSummary(
+        (long, long, long, long) Stamp, Dictionary<DateOnly, long> Days,
+        Dictionary<long, long> Intervals, bool Partial);
 
     public CodexQuotaSnapshot AddTo(CodexQuotaSnapshot snapshot)
     {
         var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".gemini", "antigravity", "conversations");
-        var today = DateOnly.FromDateTime(DateTime.Today);
+        var now = DateTimeOffset.Now;
+        var today = DateOnly.FromDateTime(now.LocalDateTime);
         var days = Enumerable.Range(-6, 7).ToDictionary(today.AddDays, _ => 0L);
+        var recent = new RecentTokenUsage(now);
         bool partial = false, readable = false;
         try
         {
@@ -34,6 +38,8 @@ public sealed class AntigravityTokenHistory
                     partial |= summary.Partial;
                     foreach (var (day, tokens) in summary.Days)
                         if (days.ContainsKey(day)) days[day] = checked(days[day] + tokens);
+                    foreach (var (seconds, tokens) in summary.Intervals)
+                        recent.Add(seconds, tokens);
                 }
                 catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException or OverflowException)
                 {
@@ -52,6 +58,7 @@ public sealed class AntigravityTokenHistory
         return snapshot with
         {
             LastSevenDays = days.OrderBy(pair => pair.Key).Select(pair => new DailyTokenUsage(pair.Key, pair.Value)).ToArray(),
+            Last24Hours = recent.GetIntervals(),
             TodayTokens = days[today],
             TokenHistoryNotice = partial ? "仅显示可读取的本地记录。" : null
         };
@@ -73,6 +80,7 @@ public sealed class AntigravityTokenHistory
         query.CommandText = "SELECT data FROM gen_metadata";
         using var rows = query.ExecuteReader();
         var days = new Dictionary<DateOnly, long>();
+        var intervals = new Dictionary<long, long>();
         var partial = false;
         while (rows.Read())
         {
@@ -92,13 +100,15 @@ public sealed class AntigravityTokenHistory
                 // Total output already includes reasoning. Cached reads are separate from uncached input.
                 long total = checked((long)(usage.Input + usage.Output + usage.CacheRead + usage.CacheWrite));
                 days[day] = checked(days.GetValueOrDefault(day) + total);
+                var start = RecentTokenUsage.SlotStart(seconds.Value);
+                intervals[start] = checked(intervals.GetValueOrDefault(start) + total);
             }
             catch (Exception ex) when (ex is ProtoException or EndOfStreamException or OverflowException or ArgumentOutOfRangeException or InvalidCastException)
             {
                 partial = true;
             }
         }
-        return new FileSummary(stamp, days, partial);
+        return new FileSummary(stamp, days, intervals, partial);
     }
 
     private static T Decode<T>(byte[] bytes) => Serializer.Deserialize<T>(bytes.AsMemory());

@@ -57,7 +57,10 @@ public sealed class AgentPlanUsageReader
                 localTokenUsage.TodayTokens,
                 localTokenUsage.LastSevenDays,
                 Endpoint,
-                status);
+                status)
+            {
+                Last24Hours = localTokenUsage.Last24Hours
+            };
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or JsonException or CryptographicException or InvalidOperationException)
         {
@@ -171,7 +174,10 @@ public sealed class AgentPlanUsageReader
             localUsage.TodayTokens,
             localUsage.LastSevenDays,
             Endpoint,
-            status);
+            status)
+        {
+            Last24Hours = localUsage.Last24Hours
+        };
 
     private static string Sha256Hex(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();

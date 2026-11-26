@@ -3,11 +3,11 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using CodexQuotaCore;
 using Button = System.Windows.Controls.Button;
-using Color = System.Windows.Media.Color;
 using MenuItem = System.Windows.Controls.MenuItem;
+using Point = System.Windows.Point;
 using Rectangle = System.Drawing.Rectangle;
 
 namespace CodexQuotaTray;
@@ -17,19 +17,25 @@ public partial class QuotaHud : Window
     public static readonly DependencyProperty LayoutEdgeProperty = DependencyProperty.Register(
         nameof(LayoutEdge), typeof(HudEdge), typeof(QuotaHud), new PropertyMetadata(HudEdge.Right));
 
+    public static readonly DependencyProperty IsExpandedProperty = DependencyProperty.Register(
+        nameof(IsExpanded), typeof(bool), typeof(QuotaHud), new PropertyMetadata(false));
+
     private readonly Row[] _rows =
     [
-        new(QuotaSource.Codex, "Codex", "chatgpt.png", Color.FromRgb(0x10, 0xa3, 0x7f)),
-        new(QuotaSource.VolcengineAgentPlan, "火山引擎", "ark.png"),
-        new(QuotaSource.Antigravity, "Antigravity", "antigravity.png")
+        new(QuotaSource.Codex),
+        new(QuotaSource.VolcengineAgentPlan),
+        new(QuotaSource.Antigravity)
     ];
+    private readonly DispatcherTimer _collapseTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private HudEdge? _dockedEdge = HudEdge.Right;
     private bool _dragging;
+    private bool _detailsOpen;
 
     public QuotaHud()
     {
         InitializeComponent();
         SourceRows.ItemsSource = _rows;
+        _collapseTimer.Tick += CollapseTimer_OnTick;
     }
 
     internal event Action<QuotaSource>? DetailsRequested;
@@ -40,6 +46,12 @@ public partial class QuotaHud : Window
         private set => SetValue(LayoutEdgeProperty, value);
     }
 
+    public bool IsExpanded
+    {
+        get => (bool)GetValue(IsExpandedProperty);
+        private set => SetValue(IsExpandedProperty, value);
+    }
+
     internal bool IsPinned
     {
         get => Pin.IsChecked;
@@ -48,6 +60,39 @@ public partial class QuotaHud : Window
 
     internal void ApplySnapshot(QuotaSource source, CodexQuotaSnapshot snapshot) =>
         _rows.Single(row => row.Source == source).Update(QuotaSummary.FromSnapshot(source, snapshot));
+
+    internal Rectangle PanelBounds()
+    {
+        var start = HudBody.PointToScreen(new Point());
+        var end = HudBody.PointToScreen(new Point(HudBody.ActualWidth, HudBody.ActualHeight));
+        return Rectangle.FromLTRB((int)Math.Round(start.X), (int)Math.Round(start.Y),
+            (int)Math.Round(end.X), (int)Math.Round(end.Y));
+    }
+
+    internal void SetDetailsOpen(bool open)
+    {
+        if (_detailsOpen == open)
+        {
+            return;
+        }
+        _detailsOpen = open;
+        if (open)
+        {
+            _collapseTimer.Stop();
+            SetExpanded(true);
+        }
+        else
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (!IsActive && !HudBody.IsMouseOver)
+                {
+                    HideIfTransient();
+                }
+                QueueCollapse();
+            });
+        }
+    }
 
     internal void RestorePosition(bool firstShow)
     {
@@ -66,7 +111,6 @@ public partial class QuotaHud : Window
         var side = edge ?? (reference.Left + reference.Width / 2 < area.Left + area.Width / 2
             ? HudEdge.Left : HudEdge.Right);
         LayoutEdge = side;
-        var horizontal = side is HudEdge.Top or HudEdge.Bottom;
         DockPanel.SetDock(Grip, side switch
         {
             HudEdge.Left => Dock.Right,
@@ -74,10 +118,7 @@ public partial class QuotaHud : Window
             HudEdge.Top => Dock.Bottom,
             _ => Dock.Top
         });
-        Grip.Width = horizontal ? double.NaN : 12;
-        Grip.Height = horizontal ? 12 : double.NaN;
-        GripMark.Width = horizontal ? 24 : 2;
-        GripMark.Height = horizontal ? 2 : 24;
+        UpdateGrip();
 
         UpdateLayout();
         var bounds = HudPlacement.Bounds(this);
@@ -87,6 +128,67 @@ public partial class QuotaHud : Window
         if (current.Size != bounds.Size)
         {
             HudPlacement.Move(this, HudPlacement.Align(area, reference, current.Size, edge));
+        }
+    }
+
+    private void UpdateGrip()
+    {
+        var horizontal = LayoutEdge is HudEdge.Top or HudEdge.Bottom;
+        var size = IsExpanded ? 12 : 5;
+        Grip.Width = horizontal ? double.NaN : size;
+        Grip.Height = horizontal ? size : double.NaN;
+        GripMark.Width = horizontal ? 24 : 2;
+        GripMark.Height = horizontal ? 2 : 24;
+        GripMark.Visibility = IsExpanded ? Visibility.Visible : Visibility.Hidden;
+    }
+
+    private void SetExpanded(bool expanded)
+    {
+        if (IsExpanded == expanded)
+        {
+            return;
+        }
+
+        var bounds = IsVisible ? HudPlacement.Bounds(this) : Rectangle.Empty;
+        IsExpanded = expanded;
+        UpdateGrip();
+        if (bounds.IsEmpty)
+        {
+            return;
+        }
+
+        UpdateLayout();
+        var area = Screen.FromRectangle(bounds).WorkingArea;
+        var size = HudPlacement.Bounds(this).Size;
+        var destination = _dockedEdge is { } edge
+            ? HudPlacement.Align(area, bounds, size, edge)
+            : HudPlacement.ResizeInward(area, bounds, size, LayoutEdge);
+        HudPlacement.Move(this, destination);
+    }
+
+    private void HudBody_OnMouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        _collapseTimer.Stop();
+        SetExpanded(true);
+    }
+
+    private void HudBody_OnMouseLeave(object sender, System.Windows.Input.MouseEventArgs e) => QueueCollapse();
+
+    private void QueueCollapse()
+    {
+        if (IsVisible && IsExpanded)
+        {
+            _collapseTimer.Stop();
+            _collapseTimer.Start();
+        }
+    }
+
+    private void CollapseTimer_OnTick(object? sender, EventArgs e)
+    {
+        _collapseTimer.Stop();
+        if (!HudBody.IsMouseOver && !_detailsOpen && !_dragging && !Actions.IsOpen)
+        {
+            SetExpanded(false);
         }
     }
 
@@ -118,6 +220,7 @@ public partial class QuotaHud : Window
         finally
         {
             _dragging = false;
+            QueueCollapse();
         }
 
         var bounds = HudPlacement.Bounds(this);
@@ -125,7 +228,7 @@ public partial class QuotaHud : Window
         {
             var area = Screen.FromPoint(System.Windows.Forms.Cursor.Position).WorkingArea;
             var distance = (int)Math.Round(24 * VisualTreeHelper.GetDpi(this).DpiScaleX);
-            PlaceOnScreen(area, bounds, HudPlacement.FindSnapEdge(area, bounds, distance));
+            PlaceOnScreen(area, bounds, HudPlacement.FindSnapEdge(area, PanelBounds(), distance));
         }
     }
 
@@ -147,16 +250,27 @@ public partial class QuotaHud : Window
             {
                 HideIfTransient();
             }
+            QueueCollapse();
         });
 
     private void Window_OnDeactivated(object? sender, EventArgs e)
     {
         HideIfTransient();
+        QueueCollapse();
+    }
+
+    private void Window_OnIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (!IsVisible)
+        {
+            _collapseTimer.Stop();
+            SetExpanded(false);
+        }
     }
 
     private void HideIfTransient()
     {
-        if (!IsPinned && !_dragging && !Actions.IsOpen)
+        if (!IsPinned && !_detailsOpen && !_dragging && !Actions.IsOpen)
         {
             Hide();
         }
@@ -169,48 +283,21 @@ public partial class QuotaHud : Window
             Hide();
             e.Handled = true;
         }
-    }
-
-    private static ImageSource LoadProviderMark(string fileName, Color? tint)
-    {
-        var bitmap = new BitmapImage();
-        bitmap.BeginInit();
-        bitmap.UriSource = new Uri($"pack://application:,,,/CodexQuotaTray;component/Assets/Providers/{fileName}");
-        bitmap.CacheOption = BitmapCacheOption.OnLoad;
-        bitmap.DecodePixelWidth = 96;
-        bitmap.EndInit();
-        bitmap.Freeze();
-        if (tint is not { } color)
+        else if (e.Key == Key.Tab)
         {
-            return bitmap;
+            _collapseTimer.Stop();
+            SetExpanded(true);
         }
-
-        var drawing = new DrawingGroup { OpacityMask = new ImageBrush(bitmap) { Stretch = Stretch.Uniform } };
-        drawing.Children.Add(new GeometryDrawing(new SolidColorBrush(color), null, new RectangleGeometry(new Rect(0, 0, 20, 20))));
-        var image = new DrawingImage(drawing);
-        image.Freeze();
-        return image;
     }
 
-    private sealed class Row(QuotaSource source, string name, string iconFile, Color? tint = null) : INotifyPropertyChanged
+    private sealed class Row(QuotaSource source) : INotifyPropertyChanged
     {
-        // Agent HUD's dark status palette. The thresholds are expressed here as remaining quota.
-        private static readonly SolidColorBrush Normal = CreateBrush(0x3d, 0xdc, 0x84);
-        private static readonly SolidColorBrush Warning = CreateBrush(0xff, 0xd2, 0x3f);
-        private static readonly SolidColorBrush Critical = CreateBrush(0xff, 0x45, 0x3a);
-        private static readonly SolidColorBrush Idle = CreateBrush(0x9a, 0x9a, 0xa0);
-
+        private readonly ProviderAppearance _appearance = ProviderAppearance.For(source);
         public QuotaSource Source { get; } = source;
-        public string Name { get; } = name;
-        public ImageSource Icon { get; } = LoadProviderMark(iconFile, tint);
+        public string Name => _appearance.Name;
+        public ImageSource Icon => _appearance.Icon;
         public QuotaSummary Summary { get; private set; } = QuotaSummary.Unavailable("正在读取额度…");
-        public SolidColorBrush StatusBrush => Summary.Fraction switch
-        {
-            null => Idle,
-            <= 0.10 => Critical,
-            <= 0.30 => Warning,
-            _ => Normal
-        };
+        public SolidColorBrush StatusBrush => ProviderAppearance.StatusBrush(Summary.Fraction);
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -226,11 +313,5 @@ public partial class QuotaHud : Window
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusBrush)));
         }
 
-        private static SolidColorBrush CreateBrush(byte red, byte green, byte blue)
-        {
-            var brush = new SolidColorBrush(Color.FromRgb(red, green, blue));
-            brush.Freeze();
-            return brush;
-        }
     }
 }

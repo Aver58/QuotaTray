@@ -1,144 +1,197 @@
 using System.Globalization;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
-using CodexQuotaCore;
-using MediaBrush = System.Windows.Media.Brush;
-using MediaColor = System.Windows.Media.Color;
-using MediaPen = System.Windows.Media.Pen;
-using WpfFlowDirection = System.Windows.FlowDirection;
-using WpfPoint = System.Windows.Point;
+using Brushes = System.Windows.Media.Brushes;
+using Color = System.Windows.Media.Color;
+using Pen = System.Windows.Media.Pen;
+using Point = System.Windows.Point;
+using Size = System.Windows.Size;
 
 namespace CodexQuotaTray;
 
+internal readonly record struct TokenChartBar(string Period, string? Tick, long Tokens);
+
 public sealed class BarChartControl : FrameworkElement
 {
-    public static readonly DependencyProperty ItemsProperty =
-        DependencyProperty.Register(
-            nameof(Items),
-            typeof(IReadOnlyList<DailyTokenUsage>),
-            typeof(BarChartControl),
-            new FrameworkPropertyMetadata(Array.Empty<DailyTokenUsage>(), FrameworkPropertyMetadataOptions.AffectsRender)
-        );
+    private const double AxisHeight = 16;
+    private static readonly Typeface AxisFont = new("Segoe UI, Microsoft YaHei UI");
+    private static readonly LinearGradientBrush PlotBars = CreateGradient();
+    private static readonly SolidColorBrush Muted = Brush(0x97, 0xA2, 0xB1);
+    private static readonly SolidColorBrush HoverBar = Brush(0x9C, 0xE1, 0xFF);
+    private static readonly SolidColorBrush HoverBand = Brush(0x1F, 0x29, 0x37);
+    private static readonly Pen Baseline = new(Brush(0x2D, 0x34, 0x40), 1);
 
-    public IReadOnlyList<DailyTokenUsage> Items
+    private readonly TextBlock _period = new() { Foreground = Muted, FontSize = 11 };
+    private readonly TextBlock _quantity = new()
     {
-        get => (IReadOnlyList<DailyTokenUsage>)GetValue(ItemsProperty);
-        set => SetValue(ItemsProperty, value);
+        Foreground = Brushes.White, FontSize = 14, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 3, 0, 0)
+    };
+    private readonly Popup _tip;
+    private IReadOnlyList<TokenChartBar> _items = [];
+    private int _hoveredIndex = -1;
+
+    public BarChartControl()
+    {
+        var labels = new StackPanel();
+        labels.Children.Add(_period);
+        labels.Children.Add(_quantity);
+        _tip = new Popup
+        {
+            Placement = PlacementMode.Relative,
+            PlacementTarget = this,
+            AllowsTransparency = true,
+            IsHitTestVisible = false,
+            Child = new Border
+            {
+                Background = Brush(0x20, 0x25, 0x30),
+                BorderBrush = Brush(0x40, 0x4C, 0x60),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(10, 7, 10, 7),
+                CornerRadius = new CornerRadius(8),
+                Child = labels
+            }
+        };
+        IsVisibleChanged += (_, _) =>
+        {
+            if (!IsVisible)
+            {
+                ClearHover();
+            }
+        };
+    }
+
+    internal void SetItems(IReadOnlyList<TokenChartBar> items)
+    {
+        if (_items.SequenceEqual(items))
+        {
+            return;
+        }
+        _items = items;
+        if (_hoveredIndex >= _items.Count)
+        {
+            ClearHover();
+        }
+        else if (_hoveredIndex >= 0)
+        {
+            ShowTip(_hoveredIndex);
+        }
+        InvalidateVisual();
     }
 
     protected override void OnRender(DrawingContext dc)
     {
         base.OnRender(dc);
-
-        var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
         var width = ActualWidth;
-        var height = ActualHeight;
-        if (width <= 10 || height <= 10)
+        var baseline = ActualHeight - AxisHeight;
+        if (width <= 0 || baseline <= 4)
         {
             return;
         }
 
-        var left = 42.0;
-        var top = 22.0;
-        var right = 12.0;
-        var bottom = 30.0;
-        var plotWidth = Math.Max(10, width - left - right);
-        var plotHeight = Math.Max(10, height - top - bottom);
-        var originY = top + plotHeight;
-
-        var gridPen = new MediaPen(new SolidColorBrush(MediaColor.FromArgb(42, 132, 143, 158)), 1);
-        var axisBrush = new SolidColorBrush(MediaColor.FromArgb(160, 180, 188, 200));
-        var barBrush = new SolidColorBrush(MediaColor.FromRgb(45, 112, 204));
-
-        var maxTokens = Math.Max(1, Items.Count == 0 ? 1 : Items.Max(item => item.TotalTokens));
-        var maxMillions = NiceMax(maxTokens / 1_000_000.0);
-
-        DrawLabel(dc, $"{maxMillions:0.#}", 12, top - 8, axisBrush, 12, dpi);
-        DrawLabel(dc, $"{maxMillions / 2:0.#}", 12, top + plotHeight / 2 - 8, axisBrush, 12, dpi);
-        DrawLabel(dc, "0", 18, originY - 8, axisBrush, 12, dpi);
-
-        for (var i = 0; i < 3; i++)
+        dc.DrawRectangle(Brushes.Transparent, null, new Rect(RenderSize));
+        dc.DrawLine(Baseline, new Point(0, baseline), new Point(width, baseline));
+        if (_items.Count == 0)
         {
-            var y = top + (plotHeight / 2) * i;
-            dc.DrawLine(gridPen, new WpfPoint(left, y), new WpfPoint(left + plotWidth, y));
-        }
-
-        if (Items.Count == 0)
-        {
+            DrawAxisText(dc, "暂无本地用量记录", width / 2, baseline / 2 - 7);
             return;
         }
 
-        var slot = plotWidth / Items.Count;
-        var barWidth = Math.Min(18, slot * 0.42);
-        for (var i = 0; i < Items.Count; i++)
+        var slot = width / _items.Count;
+        var peak = Math.Max(1, _items.Max(item => item.Tokens));
+        var barWidth = Math.Min(30, slot * 0.76);
+        for (var i = 0; i < _items.Count; i++)
         {
-            var item = Items[i];
-            var valueMillions = item.TotalTokens / 1_000_000.0;
-            var barHeight = Math.Max(2, plotHeight * Math.Min(valueMillions / maxMillions, 1));
-            var x = left + i * slot + (slot - barWidth) / 2;
-            var y = originY - barHeight;
-            dc.DrawRoundedRectangle(barBrush, null, new Rect(x, y, barWidth, barHeight), 2, 2);
-
-            var dayLabel = item.Date.Day.ToString(CultureInfo.InvariantCulture);
-            DrawCenteredLabel(dc, dayLabel, x + barWidth / 2, originY + 8, axisBrush, 11, dpi);
+            var item = _items[i];
+            var center = (i + 0.5) * slot;
+            var hovered = i == _hoveredIndex;
+            if (hovered)
+            {
+                dc.DrawRectangle(HoverBand, null, new Rect(i * slot, 0, slot, baseline));
+            }
+            if (item.Tokens > 0)
+            {
+                var height = Math.Max(1.5, item.Tokens / (double)peak * (baseline - 4));
+                var bar = new Rect(center - barWidth / 2, baseline - height, barWidth, height);
+                dc.DrawRoundedRectangle(hovered ? HoverBar : PlotBars, null, bar, 1.2, 1.2);
+            }
+            if (item.Tick is { } tick)
+            {
+                DrawAxisText(dc, tick, center, baseline + 3);
+            }
         }
     }
 
-    private static double NiceMax(double value)
+    protected override void OnMouseMove(System.Windows.Input.MouseEventArgs e)
     {
-        if (value <= 0.1)
+        base.OnMouseMove(e);
+        var position = e.GetPosition(this);
+        if (_items.Count == 0 || position.X < 0 || position.X >= ActualWidth ||
+            position.Y < 0 || position.Y >= ActualHeight - AxisHeight)
         {
-            return 0.1;
+            ClearHover();
+            return;
         }
 
-        if (value <= 1)
+        var index = Math.Min(_items.Count - 1, (int)(position.X / ActualWidth * _items.Count));
+        if (index != _hoveredIndex)
         {
-            return 1;
+            _hoveredIndex = index;
+            ShowTip(index);
+            InvalidateVisual();
         }
-
-        if (value <= 5)
-        {
-            return 5;
-        }
-
-        if (value <= 10)
-        {
-            return 10;
-        }
-
-        if (value <= 50)
-        {
-            return 50;
-        }
-
-        return Math.Ceiling(value / 100.0) * 100.0;
     }
 
-    private static void DrawLabel(DrawingContext dc, string text, double x, double y, MediaBrush brush, double size, double dpi)
+    protected override void OnMouseLeave(System.Windows.Input.MouseEventArgs e)
     {
-        var formatted = new FormattedText(
-            text,
-            CultureInfo.InvariantCulture,
-            WpfFlowDirection.LeftToRight,
-            new Typeface("Segoe UI"),
-            size,
-            brush,
-            dpi
-        );
-        dc.DrawText(formatted, new WpfPoint(x, y));
+        base.OnMouseLeave(e);
+        ClearHover();
     }
 
-    private static void DrawCenteredLabel(DrawingContext dc, string text, double centerX, double y, MediaBrush brush, double size, double dpi)
+    internal void ClearHover()
     {
-        var formatted = new FormattedText(
-            text,
-            CultureInfo.InvariantCulture,
-            WpfFlowDirection.LeftToRight,
-            new Typeface("Segoe UI"),
-            size,
-            brush,
-            dpi
-        );
-        dc.DrawText(formatted, new WpfPoint(centerX - formatted.Width / 2, y));
+        if (_hoveredIndex >= 0)
+        {
+            _hoveredIndex = -1;
+            _tip.IsOpen = false;
+            InvalidateVisual();
+        }
+    }
+
+    private void ShowTip(int index)
+    {
+        var item = _items[index];
+        _period.Text = item.Period;
+        _quantity.Text = $"{item.Tokens:N0} Token";
+        _tip.Child.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var desired = _tip.Child.DesiredSize;
+        var center = ActualWidth * (index + 0.5) / _items.Count;
+        _tip.HorizontalOffset = Math.Clamp(center - desired.Width / 2, 0, Math.Max(0, ActualWidth - desired.Width));
+        _tip.VerticalOffset = -desired.Height - 6;
+        _tip.IsOpen = true;
+    }
+
+    private void DrawAxisText(DrawingContext dc, string text, double center, double y)
+    {
+        var label = new FormattedText(text, CultureInfo.CurrentCulture, System.Windows.FlowDirection.LeftToRight,
+            AxisFont, 10, Muted, VisualTreeHelper.GetDpi(this).PixelsPerDip);
+        var x = Math.Clamp(center - label.Width / 2, 0, Math.Max(0, ActualWidth - label.Width));
+        dc.DrawText(label, new Point(x, y));
+    }
+
+    private static LinearGradientBrush CreateGradient()
+    {
+        var brush = new LinearGradientBrush(Color.FromRgb(0x73, 0x5C, 0xD3), Color.FromRgb(0x64, 0xCA, 0xFA),
+            new Point(0, 1), new Point(0, 0));
+        brush.Freeze();
+        return brush;
+    }
+
+    private static SolidColorBrush Brush(byte red, byte green, byte blue)
+    {
+        var brush = new SolidColorBrush(Color.FromRgb(red, green, blue));
+        brush.Freeze();
+        return brush;
     }
 }
