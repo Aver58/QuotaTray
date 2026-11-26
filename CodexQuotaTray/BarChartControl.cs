@@ -11,8 +11,6 @@ using Size = System.Windows.Size;
 
 namespace CodexQuotaTray;
 
-internal readonly record struct TokenChartBar(string Period, string? Tick, long Tokens);
-
 public sealed class BarChartControl : FrameworkElement
 {
     private const double AxisHeight = 16;

@@ -1,18 +1,18 @@
 # CodexQuotaTray
 
-Windows 11 的任务栏托盘额度组件。左键打开三行浮窗，同时查看 Codex、火山引擎 Agent Plan 和 Antigravity。右键通过 **托盘图标来源** 选择任务栏图标和提示显示的服务。
+适用于 Windows 10（1607 及以上）和 Windows 11 x64 的任务栏托盘额度组件。左键打开三行浮窗，同时查看 Codex、火山引擎 Agent Plan 和 Antigravity。右键通过 **托盘图标来源** 选择任务栏图标和提示显示的服务。
 
 ## 下载和运行
 
-1. Windows x64 默认下载轻量包。轻量包需要 .NET 10 Desktop Runtime（x64），便携包已内置运行时。两个包都可以在下载页和 GitHub Releases 获取。 [下载页](https://codex-quota-tray-aver58.pages.dev/) · [GitHub Releases](https://github.com/Aver58/QuotaTray/releases/latest) · [.NET 10 下载](https://dotnet.microsoft.com/zh-cn/download/dotnet/10.0)
-2. 解压所选的 ZIP，双击 `CodexQuotaTray.exe`。
+1. 从下载页或 GitHub Releases 获取 Windows x64 原生便携包。 [下载页](https://codex-quota-tray-aver58.pages.dev/) · [GitHub Releases](https://github.com/Aver58/QuotaTray/releases/latest)
+2. 解压 ZIP 并双击 `CodexQuotaTray.exe`。v0.6.0 起使用 Win32 界面和 Native AOT 单文件发布，运行时无需安装 .NET。v0.5.7 的轻量包仍需要 .NET 10 桌面运行时。
 3. 左键单击托盘图标打开浮窗。移入浮窗会展开百分比，移开后收成三个居中的圆环。悬停圆环可看重置时间，单击可看详情。在圆环上按住左键拖动即可移动浮窗，靠近四个屏幕边沿时自动吸附，也可在浮窗右键菜单中选边。切换到其他窗口时浮窗和详情保持打开，默认置顶，可通过右键菜单中的 **置顶浮窗** 切换。要退出程序，在托盘右键菜单中选择 **退出**。
 
 换电脑时，在目标电脑登录对应服务，或在 **设置** 配置火山引擎。需要登录 Windows 后自动启动时，将程序快捷方式放入 `shell:startup` 文件夹。
 
 ## 自动更新
 
-v0.3.0 起，组件通过 HTTPS 匿名读取 Cloudflare 上的稳定版清单，在启动时及每 6 小时检查更新。轻量包与便携包分别获取各自的更新。右键托盘选择 **检查更新** 可立即执行，也可关闭 **自动更新**。用户无需安装 GitHub CLI 或登录 GitHub。旧版用户可以退出组件，用新 EXE 替换原程序一次。
+组件通过 HTTPS 匿名读取 Cloudflare 上的稳定版清单，在启动时及每 6 小时检查更新。原生版沿用便携清单，旧轻量包可从自己的清单升级为同一个原生 EXE。右键托盘选择 **检查更新** 可立即执行，也可关闭 **自动更新**。用户无需安装 GitHub CLI 或登录 GitHub。也可以退出组件后用新 EXE 替换原文件。
 
 客户端按版本号选择更新，核对 ZIP 大小、SHA-256 和 EXE 版本，在原位置替换并重启。程序目录需要允许当前 Windows 用户写入。若新版启动失败，助手尝试恢复旧程序。
 
@@ -40,18 +40,19 @@ v0.3.0 起，组件通过 HTTPS 匿名读取 Cloudflare 上的稳定版清单，
 
 ## 从源码构建
 
-在 Windows 上安装 .NET 10 SDK，在仓库根目录运行以下命令。
+构建机需要 .NET 10 SDK 和 Visual Studio 2022 或更高版本的「使用 C++ 的桌面开发」工具集。在仓库根目录运行以下命令。
 
 ```powershell
 dotnet build .\CodexQuotaTray.sln -c Release
 .\scripts\Build-Release.ps1
 ```
 
-`dist/` 中会生成轻量 ZIP 和便携 ZIP，每个包只含一个 EXE。轻量包使用 `latest-lightweight.json`，便携包使用原有的 `latest.json`。维护者先上传两个带版本号的 ZIP，再更新对应清单。Cloudflare Pages 通过 R2 绑定读取专用桶，站点配置位于 `release-site/`。独立部署的维护者需将 `ReleaseUpdater.cs` 中的站点地址改为自己的 HTTPS 域名。
+`dist/` 中会生成原生便携 ZIP 和内容相同的轻量更新兼容 ZIP。每个包只含一个 EXE。维护者先上传两个带版本号的 ZIP，再更新 `latest.json` 和 `latest-lightweight.json`。Cloudflare Pages 通过 R2 绑定读取专用桶，站点配置位于 `release-site/`。独立部署的维护者需将 `ReleaseUpdater.cs` 中的站点地址改为自己的 HTTPS 域名。
 
 | 目录 | 内容 |
 | --- | --- |
-| `CodexQuotaTray/` | WPF 面板、托盘菜单和设置窗口 |
+| `CodexQuotaNative/` | Win32 浮窗、详情、托盘和设置窗口 |
+| `CodexQuotaTray/` | 旧 WPF 界面与原生版共用的设置、展示和自动更新代码 |
 | `CodexQuotaCore/` | 三种来源的额度读取与本地用量统计 |
 | `CodexQuotaSmoke/` | 在终端读取并显示 Codex 额度的诊断工具 |
 

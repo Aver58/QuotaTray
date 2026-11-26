@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace CodexQuotaTray;
 
@@ -29,8 +30,6 @@ internal sealed record TraySettings(
     bool AutomaticUpdates = true,
     bool AlwaysOnTop = true)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
-
     public bool HasVolcengineCredentials =>
         !string.IsNullOrWhiteSpace(VolcengineAccessKeyId) && !string.IsNullOrWhiteSpace(VolcengineSecretAccessKey);
 
@@ -57,10 +56,7 @@ internal sealed record TraySettings(
         try
         {
             using var stream = File.OpenRead(settingsPath);
-            var dto = JsonSerializer.Deserialize<SettingsFile>(stream, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            });
+            var dto = JsonSerializer.Deserialize(stream, TraySettingsJson.Default.SettingsFile);
 
             var source = Enum.TryParse<QuotaSource>(dto?.Source, true, out var parsedSource) && Enum.IsDefined(parsedSource)
                 ? parsedSource
@@ -101,7 +97,7 @@ internal sealed record TraySettings(
         };
 
         var temporaryPath = SettingsPath + ".tmp";
-        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(dto, JsonOptions), Encoding.UTF8);
+        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(dto, TraySettingsJson.Default.SettingsFile), Encoding.UTF8);
         File.Move(temporaryPath, SettingsPath, true);
     }
 
@@ -220,7 +216,7 @@ internal sealed record TraySettings(
     [DllImport("kernel32.dll")]
     private static extern IntPtr LocalFree(IntPtr memory);
 
-    private sealed class SettingsFile
+    internal sealed class SettingsFile
     {
         public int? RefreshSeconds { get; set; }
         public string? CodexHome { get; set; }
@@ -232,3 +228,7 @@ internal sealed record TraySettings(
         public string? ProtectedVolcengineSecret { get; set; }
     }
 }
+
+[JsonSourceGenerationOptions(WriteIndented = true, PropertyNameCaseInsensitive = true)]
+[JsonSerializable(typeof(TraySettings.SettingsFile))]
+internal partial class TraySettingsJson : JsonSerializerContext { }

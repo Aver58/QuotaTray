@@ -40,7 +40,9 @@ public partial class QuotaWindow : Window
         SourceTitleText.Text = appearance.Name;
         SourceIcon.Source = appearance.Icon;
         QuotaHeading.Text = source == QuotaSource.VolcengineAgentPlan ? "Agent Plan · AFP" : "额度";
-        QuotaRows.ItemsSource = MakeQuotaRows(snapshot, source);
+        QuotaRows.ItemsSource = QuotaDetails.Rows(snapshot, source).Select(row => new QuotaRow(
+            row.Name, row.Used, row.Remaining, row.Reset, row.Fraction.GetValueOrDefault(),
+            ProviderAppearance.StatusBrush(row.Fraction), row.Note)).ToArray();
 
         var volcano = source == QuotaSource.VolcengineAgentPlan;
         VolcanoBalancePanel.Visibility = volcano ? Visibility.Visible : Visibility.Collapsed;
@@ -86,82 +88,12 @@ public partial class QuotaWindow : Window
 
         var week = WeekRange.IsChecked == true;
         var volcano = _source == QuotaSource.VolcengineAgentPlan;
-        var tickInterval = volcano ? 6 : 24;
-        TokenChartBar[] points = week
-            ? snapshot.LastSevenDays.Select(day => new TokenChartBar(
-                $"{day.Date:yyyy/MM/dd}", $"{day.Date:MM/dd}", day.TotalTokens)).ToArray()
-            : snapshot.Last24Hours.Select((slot, index) =>
-            {
-                var start = volcano ? slot.Start : slot.Start.ToLocalTime();
-                var end = volcano ? slot.End : slot.End.ToLocalTime();
-                return new TokenChartBar(FormatPeriod(start, end), index % tickInterval == 0 ? $"{start:HH:mm}" : null, slot.TotalTokens);
-            }).ToArray();
+        var points = QuotaDetails.Chart(snapshot, week, volcano);
         Chart.SetItems(points);
         var visibility = volcano && points.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         Chart.Visibility = visibility;
         TokenRangeOptions.Visibility = visibility;
-        if (points.Length == 0)
-        {
-            ChartSummaryText.Text = volcano ? snapshot.TokenHistoryNotice ?? "正在读取火山引擎用量明细…" : "本地会话记录";
-            return;
-        }
-
-        var interval = week ? "每日一柱" : volcano ? "每小时一柱" : "每 15 分钟一柱";
-        var timeZone = volcano ? " · 北京时间" : "";
-        var total = FormatTokens(points.Sum(point => (decimal)point.Tokens));
-        ChartSummaryText.Text = $"近 {(week ? "7 天" : "24 小时")}合计 {total} Token · {interval}{timeZone}";
-    }
-
-    private static string FormatPeriod(DateTimeOffset start, DateTimeOffset end)
-    {
-        if (start.Offset != end.Offset)
-        {
-            return $"{start:MM/dd HH:mm zzz} – {end:MM/dd HH:mm zzz}";
-        }
-        return start.Date == end.Date
-            ? $"{start:MM/dd HH:mm} – {end:HH:mm}"
-            : $"{start:MM/dd HH:mm} – {end:MM/dd HH:mm}";
-    }
-
-    private static IReadOnlyList<QuotaRow> MakeQuotaRows(CodexQuotaSnapshot snapshot, QuotaSource source)
-    {
-        if (source == QuotaSource.Antigravity)
-        {
-            return
-            [
-                QuotaRow.For("Gemini · 5 小时", snapshot.Primary),
-                QuotaRow.For("Gemini · 周", snapshot.Secondary),
-                QuotaRow.For("Claude + GPT · 5 小时", snapshot.Daily),
-                QuotaRow.For("Claude + GPT · 周", snapshot.Monthly)
-            ];
-        }
-
-        var rows = new List<QuotaRow>(4);
-        if (source == QuotaSource.Codex && snapshot.Primary.ResetsAt is null && snapshot.AvailableResetCredits is int cards)
-        {
-            rows.Add(new QuotaRow("重置卡", "—", $"{cards} 张", "—", 0,
-                ProviderAppearance.StatusBrush(null), null));
-        }
-        else if (snapshot.Primary.IsAvailable)
-        {
-            rows.Add(QuotaRow.For("5 小时额度", snapshot.Primary));
-        }
-        if (snapshot.Secondary.IsAvailable || rows.Count == 0)
-        {
-            rows.Add(QuotaRow.For("周额度", snapshot.Secondary));
-        }
-        if (source == QuotaSource.VolcengineAgentPlan)
-        {
-            if (snapshot.Daily.IsAvailable)
-            {
-                rows.Add(QuotaRow.For("日额度", snapshot.Daily));
-            }
-            if (snapshot.Monthly.IsAvailable)
-            {
-                rows.Add(QuotaRow.For("月额度", snapshot.Monthly));
-            }
-        }
-        return rows;
+        ChartSummaryText.Text = QuotaDetails.ChartSummary(snapshot, points, week, volcano);
     }
 
     private void CloseButton_OnClick(object sender, RoutedEventArgs e) => RequestHide?.Invoke(this, EventArgs.Empty);
@@ -191,28 +123,7 @@ public partial class QuotaWindow : Window
         }
     }
 
-    private static string FormatTokens(decimal tokens) => tokens switch
-    {
-        >= 1_000_000 => $"{tokens / 1_000_000:0.##}M",
-        >= 1_000 => $"{tokens / 1_000:0.#}K",
-        _ => $"{tokens:0}"
-    };
-
     private sealed record QuotaRow(
         string Name, string Used, string Remaining, string Reset, double RemainingFraction,
-        SolidColorBrush Tone, string? Note)
-    {
-        internal static QuotaRow For(string name, QuotaBucket bucket)
-        {
-            var available = bucket.IsAvailable && double.IsFinite(bucket.RemainingPercent) && double.IsFinite(bucket.UsedPercent);
-            var fraction = available ? Math.Clamp(bucket.RemainingPercent / 100, 0, 1) : (double?)null;
-            var note = bucket.TotalAmount is { } total && bucket.UsedAmount is { } used && bucket.Unit is { } unit
-                ? $"剩余 {Math.Max(0, total - used):0.##} / {total:0.##} {unit}" : null;
-            return new QuotaRow(name,
-                available ? $"{Math.Clamp(bucket.UsedPercent, 0, 100):0.#}%" : "—",
-                fraction is { } remaining ? $"{remaining * 100:0.#}%" : "—",
-                bucket.ResetsAt is { } reset ? $"{reset.LocalDateTime:MM/dd HH:mm}" : "—",
-                fraction.GetValueOrDefault(), ProviderAppearance.StatusBrush(fraction), note);
-        }
-    }
+        SolidColorBrush Tone, string? Note);
 }

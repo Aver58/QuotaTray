@@ -10,9 +10,9 @@ a{color:#89c6ff}.download{display:inline-block;background:#50e774;color:#10131a;
 <main><h1>QuotaTray</h1><p>在 Windows 托盘查看 Codex、火山引擎和 Antigravity 的额度。解压后运行 CodexQuotaTray.exe，火山引擎用户可在设置中填写自己的密钥。</p>
 <div class="package">
   <div id="lightweight" aria-live="polite">正在读取轻量包…</div>
-  <small>需要 <a href="https://dotnet.microsoft.com/zh-cn/download/dotnet/10.0">.NET 10 桌面运行时（x64）</a>。</small>
+  <small id="runtime">需要 <a href="https://dotnet.microsoft.com/zh-cn/download/dotnet/10.0">.NET 10 桌面运行时（x64）</a>。</small>
 </div>
-<div class="package">
+<div class="package" id="portable-package">
   <div id="portable" aria-live="polite">正在读取便携包…</div>
   <small>内置运行时，解压即可运行。</small>
 </div>
@@ -23,22 +23,30 @@ async function showDownload(selector, manifest, label, suffix) {
   try {
     const res = await fetch(manifest);
     if (!res.ok) throw new Error();
-    const { tag, asset, size } = await res.json();
+    const { tag, asset, size, sha256, runtime } = await res.json();
     if (!/^v\d+\.\d+\.\d+$/.test(tag) || asset !== `CodexQuotaTray-${tag}-win-x64${suffix}.zip` ||
         !Number.isSafeInteger(size) || size <= 0) throw new Error();
     const link = document.createElement("a");
     if (suffix) link.className = "download";
     link.href = "/downloads/" + asset;
     const displaySize = size < 1048576 ? `${Math.round(size / 1024)} KiB` : `${(size / 1048576).toFixed(1)} MiB`;
-    link.textContent = `下载${label} · ${tag} · ${displaySize}`;
+    const name = runtime === "win32" && suffix ? "原生便携包" : label;
+    link.textContent = `下载${name} · ${tag} · ${displaySize}`;
     area.replaceChildren(link);
+    return { runtime, sha256 };
   } catch {
     area.textContent = `暂时无法获取${label}。`;
   }
 }
 
-await Promise.all([
+const [lightweight, portable] = await Promise.all([
   showDownload("#lightweight", "/latest-lightweight.json", "轻量包", "-lightweight"),
   showDownload("#portable", "/latest.json", "便携包", "")
 ]);
+if (lightweight?.runtime === "win32") {
+  document.querySelector("#runtime").textContent = "适用于 Windows 10 和 11（x64）。解压即可运行。";
+  if (portable?.runtime === "win32" && lightweight.sha256 && portable.sha256 === lightweight.sha256) {
+    document.querySelector("#portable-package").hidden = true;
+  }
+}
 </script></html>

@@ -66,15 +66,9 @@ public sealed class AgentPlanUsageReader
     public AgentPlanTokenHistory ReadTokenHistory(string accessKeyId, string secretAccessKey)
     {
         var now = DateTimeOffset.UtcNow.ToOffset(BeijingOffset);
-        var body = JsonSerializer.Serialize(new
-        {
-            QueryInterval = "Hour",
-            Filter = new
-            {
-                StartTime = now.AddDays(-6).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                EndTime = now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
-            }
-        });
+        var start = now.AddDays(-6).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var end = now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var body = $$$"""{"QueryInterval":"Hour","Filter":{"StartTime":"{{{start}}}","EndTime":"{{{end}}}"}}""";
 
         try
         {

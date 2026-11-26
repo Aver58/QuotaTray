@@ -1,6 +1,3 @@
-using Microsoft.Data.Sqlite;
-using ProtoBuf;
-
 namespace CodexQuotaCore;
 
 public sealed class AntigravityTokenHistory
@@ -41,7 +38,8 @@ public sealed class AntigravityTokenHistory
                     foreach (var (seconds, tokens) in summary.Intervals)
                         recent.Add(seconds, tokens);
                 }
-                catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException or OverflowException)
+                catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException
+                                           or OverflowException or DllNotFoundException or EntryPointNotFoundException)
                 {
                     partial = true;
                 }
@@ -66,19 +64,9 @@ public sealed class AntigravityTokenHistory
 
     private static FileSummary ReadSession(string file, (long, long, long, long) stamp)
     {
-        var options = new SqliteConnectionStringBuilder { DataSource = file, Mode = SqliteOpenMode.ReadOnly,
-            Pooling = false, DefaultTimeout = 1 };
-        using var db = new SqliteConnection(options.ToString());
-        db.Open();
-        using var transaction = db.BeginTransaction(deferred: true);
-        using var step = db.CreateCommand();
-        step.Transaction = transaction;
-        step.CommandText = "SELECT metadata FROM steps WHERE idx = $idx";
-        var index = step.Parameters.Add("$idx", SqliteType.Integer);
-        using var query = db.CreateCommand();
-        query.Transaction = transaction;
-        query.CommandText = "SELECT data FROM gen_metadata";
-        using var rows = query.ExecuteReader();
+        using var db = new WindowsSqlite(file);
+        using var step = db.Prepare("SELECT metadata FROM steps WHERE idx = ?");
+        using var rows = db.Prepare("SELECT data FROM gen_metadata");
         var days = new Dictionary<DateOnly, long>();
         var intervals = new Dictionary<long, long>();
         var partial = false;
@@ -86,24 +74,21 @@ public sealed class AntigravityTokenHistory
         {
             try
             {
-                var generation = Decode<Generation>((byte[])rows[0]);
-                var usage = generation.Model?.Usage;
-                if (usage == null) { partial = true; continue; }
-                long? seconds = generation.Model?.Timing?.At?.Seconds;
-                if (seconds is null && generation.Steps is { Length: > 0 })
+                var generation = AntigravityGeneration.Read(rows.Blob());
+                if (generation.Tokens is not long total) { partial = true; continue; }
+                var seconds = generation.Seconds;
+                if (seconds is null && generation.FirstStep is int index)
                 {
-                    index.Value = generation.Steps[0];
-                    if (step.ExecuteScalar() is byte[] bytes) seconds = Decode<Step>(bytes).Created?.Seconds;
+                    step.BindIndex(index);
+                    if (step.Read()) seconds = AntigravityGeneration.StepSeconds(step.Blob());
                 }
                 if (seconds is null or <= 0) { partial = true; continue; }
                 var day = DateOnly.FromDateTime(DateTimeOffset.FromUnixTimeSeconds(seconds.Value).LocalDateTime);
-                // Total output already includes reasoning. Cached reads are separate from uncached input.
-                long total = checked((long)(usage.Input + usage.Output + usage.CacheRead + usage.CacheWrite));
                 days[day] = checked(days.GetValueOrDefault(day) + total);
                 var start = RecentTokenUsage.SlotStart(seconds.Value);
                 intervals[start] = checked(intervals.GetValueOrDefault(start) + total);
             }
-            catch (Exception ex) when (ex is ProtoException or EndOfStreamException or OverflowException or ArgumentOutOfRangeException or InvalidCastException)
+            catch (Exception ex) when (ex is InvalidDataException or OverflowException or ArgumentOutOfRangeException)
             {
                 partial = true;
             }
@@ -111,26 +96,4 @@ public sealed class AntigravityTokenHistory
         return new FileSummary(stamp, days, intervals, partial);
     }
 
-    private static T Decode<T>(byte[] bytes) => Serializer.Deserialize<T>(bytes.AsMemory());
-
-    [ProtoContract] private sealed class Generation
-    {
-        [ProtoMember(1)] public ChatModel? Model { get; set; }
-        [ProtoMember(2, IsPacked = true)] public int[]? Steps { get; set; }
-    }
-    [ProtoContract] private sealed class ChatModel
-    {
-        [ProtoMember(4)] public UsageCounters? Usage { get; set; }
-        [ProtoMember(9)] public Timing? Timing { get; set; }
-    }
-    [ProtoContract] private sealed class UsageCounters
-    {
-        [ProtoMember(2)] public ulong Input { get; set; }
-        [ProtoMember(3)] public ulong Output { get; set; }
-        [ProtoMember(4)] public ulong CacheWrite { get; set; }
-        [ProtoMember(5)] public ulong CacheRead { get; set; }
-    }
-    [ProtoContract] private sealed class Timing { [ProtoMember(4)] public Timestamp? At { get; set; } }
-    [ProtoContract] private sealed class Step { [ProtoMember(1)] public Timestamp? Created { get; set; } }
-    [ProtoContract] private sealed class Timestamp { [ProtoMember(1)] public long Seconds { get; set; } }
 }
