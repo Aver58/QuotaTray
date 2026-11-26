@@ -150,7 +150,7 @@
                     <Border BorderBrush="#2A303B" BorderThickness="0,1,0,0" Margin="0,9,0,0" Padding="0,7,0,0">
                         <StackPanel>
                             <DockPanel>
-                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                <StackPanel x:Name="TokenRangeOptions" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                                     <RadioButton x:Name="RecentRange" Content="24 小时" Style="{StaticResource Range}"
                                                  GroupName="TokenRange" Checked="Range_OnChecked" IsChecked="True"/>
                                     <RadioButton x:Name="WeekRange" Content="7 天" Style="{StaticResource Range}"

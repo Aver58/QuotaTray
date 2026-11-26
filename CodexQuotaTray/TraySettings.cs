@@ -26,7 +26,8 @@ internal sealed record TraySettings(
     string? VolcengineAccessKeyId,
     string? VolcengineSecretAccessKey,
     ResetTimeWindow TooltipResetWindow,
-    bool AutomaticUpdates = true)
+    bool AutomaticUpdates = true,
+    bool AlwaysOnTop = true)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
@@ -74,7 +75,8 @@ internal sealed record TraySettings(
                 userProfile ? dto?.VolcengineAccessKeyId : null,
                 userProfile ? Unprotect(dto?.ProtectedVolcengineSecret) : null,
                 tooltipResetWindow,
-                dto?.AutomaticUpdates ?? true);
+                dto?.AutomaticUpdates ?? true,
+                dto?.AlwaysOnTop ?? true);
         }
         catch
         {
@@ -92,6 +94,7 @@ internal sealed record TraySettings(
             CodexHome = CodexHome,
             Source = Source.ToString(),
             AutomaticUpdates = AutomaticUpdates,
+            AlwaysOnTop = AlwaysOnTop,
             TooltipResetWindow = TooltipResetWindow.ToString(),
             VolcengineAccessKeyId = VolcengineAccessKeyId,
             ProtectedVolcengineSecret = Protect(VolcengineSecretAccessKey)
@@ -223,6 +226,7 @@ internal sealed record TraySettings(
         public string? CodexHome { get; set; }
         public string? Source { get; set; }
         public bool? AutomaticUpdates { get; set; }
+        public bool? AlwaysOnTop { get; set; }
         public string? TooltipResetWindow { get; set; }
         public string? VolcengineAccessKeyId { get; set; }
         public string? ProtectedVolcengineSecret { get; set; }

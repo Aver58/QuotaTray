@@ -8,7 +8,7 @@
         Background="Transparent" ShowInTaskbar="False" Topmost="True"
         FontFamily="Segoe UI Variable Text, Microsoft YaHei UI, Segoe UI"
         TextOptions.TextFormattingMode="Display" UseLayoutRounding="True" SnapsToDevicePixels="True"
-        Deactivated="Window_OnDeactivated" IsVisibleChanged="Window_OnIsVisibleChanged"
+        IsVisibleChanged="Window_OnIsVisibleChanged"
         PreviewKeyDown="Window_OnPreviewKeyDown">
     <Window.ContextMenu>
         <ContextMenu x:Name="Actions" Closed="Actions_OnClosed">
@@ -17,7 +17,7 @@
             <MenuItem Header="贴靠上边" Tag="{x:Static local:HudEdge.Top}" Click="Dock_OnClick"/>
             <MenuItem Header="贴靠下边" Tag="{x:Static local:HudEdge.Bottom}" Click="Dock_OnClick"/>
             <Separator/>
-            <MenuItem x:Name="Pin" Header="固定在桌面" IsCheckable="True"/>
+            <MenuItem x:Name="TopmostOption" Header="置顶浮窗" IsCheckable="True" Click="Topmost_OnClick"/>
             <MenuItem Header="收起浮窗" Click="Close_OnClick"/>
         </ContextMenu>
     </Window.ContextMenu>
@@ -42,9 +42,13 @@
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Frame" Property="Background" Value="#26344C"/>
                             </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding IsKeyboardFocused, RelativeSource={RelativeSource TemplatedParent}}" Value="True"/>
+                                    <Condition Binding="{Binding IsExpanded, RelativeSource={RelativeSource AncestorType=local:QuotaHud}}" Value="True"/>
+                                </MultiDataTrigger.Conditions>
                                 <Setter TargetName="Frame" Property="BorderBrush" Value="#879BB9"/>
-                            </Trigger>
+                            </MultiDataTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -83,13 +87,20 @@
         </Style>
     </Window.Resources>
     <Border x:Name="HudBody" Background="#D1000000" BorderBrush="#24FFFFFF"
-            BorderThickness="1" CornerRadius="15" Padding="4"
-            MouseEnter="HudBody_OnMouseEnter" MouseLeave="HudBody_OnMouseLeave">
+            BorderThickness="1" Padding="4"
+            MouseEnter="HudBody_OnMouseEnter" MouseLeave="HudBody_OnMouseLeave"
+            PreviewMouseLeftButtonDown="HudBody_OnPointerDown" MouseLeftButtonDown="HudBody_OnBackgroundDown"
+            PreviewMouseMove="HudBody_OnPointerMove" PreviewMouseLeftButtonUp="HudBody_OnPointerUp"
+            LostMouseCapture="HudBody_OnLostMouseCapture">
         <Border.Style>
             <Style TargetType="Border">
                 <Setter Property="HorizontalAlignment" Value="Right"/>
                 <Setter Property="VerticalAlignment" Value="Center"/>
+                <Setter Property="CornerRadius" Value="25"/>
                 <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsExpanded, RelativeSource={RelativeSource AncestorType=local:QuotaHud}}" Value="True">
+                        <Setter Property="CornerRadius" Value="17"/>
+                    </DataTrigger>
                     <DataTrigger Binding="{Binding LayoutEdge, RelativeSource={RelativeSource AncestorType=local:QuotaHud}}" Value="{x:Static local:HudEdge.Left}">
                         <Setter Property="HorizontalAlignment" Value="Left"/>
                     </DataTrigger>
@@ -104,12 +115,6 @@
                 </Style.Triggers>
             </Style>
         </Border.Style>
-        <DockPanel>
-            <Border x:Name="Grip" Width="5" DockPanel.Dock="Left" Background="Transparent" Cursor="SizeAll"
-                    ToolTip="拖动贴靠屏幕边沿 · 右键打开选项" MouseLeftButtonDown="Grip_OnMouseLeftButtonDown">
-                <Border x:Name="GripMark" Width="2" Height="24" CornerRadius="1" Background="#637594" Visibility="Hidden"
-                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
             <ItemsControl x:Name="SourceRows">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
@@ -142,16 +147,16 @@
                                     </StackPanel>
                                 </ToolTip>
                             </Button.ToolTip>
-                            <DockPanel x:Name="Reading" Width="38" Height="39">
+                            <DockPanel x:Name="Reading" Width="32" Height="39">
                                 <Grid x:Name="Badge" DockPanel.Dock="Left" Width="32" Height="32"
-                                      Margin="0,0,6,0" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                      HorizontalAlignment="Center" VerticalAlignment="Center">
                                     <local:QuotaRing Accent="{Binding StatusBrush}" Fraction="{Binding Summary.Fraction, TargetNullValue=0}"/>
                                     <Image Source="{Binding Icon}" Width="18" Height="18" Stretch="Uniform"
                                            RenderOptions.BitmapScalingMode="HighQuality"
                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Grid>
                                 <Viewbox x:Name="Readout" Height="25" StretchDirection="DownOnly"
-                                         VerticalAlignment="Center" Visibility="Collapsed">
+                                         Margin="4,0" VerticalAlignment="Center" Visibility="Collapsed">
                                     <TextBlock Text="{Binding Summary.Value}" Foreground="{Binding StatusBrush}"
                                                FontSize="21" Typography.NumeralAlignment="Tabular"/>
                                 </Viewbox>
@@ -164,19 +169,16 @@
                             </DataTrigger>
                             <DataTrigger Binding="{Binding LayoutEdge, RelativeSource={RelativeSource AncestorType=local:QuotaHud}}" Value="{x:Static local:HudEdge.Right}">
                                 <Setter TargetName="Badge" Property="DockPanel.Dock" Value="Right"/>
-                                <Setter TargetName="Badge" Property="Margin" Value="6,0,0,0"/>
                             </DataTrigger>
                             <DataTrigger Binding="{Binding LayoutEdge, RelativeSource={RelativeSource AncestorType=local:QuotaHud}}" Value="{x:Static local:HudEdge.Top}">
                                 <Setter TargetName="Reading" Property="Width" Value="51"/>
-                                <Setter TargetName="Reading" Property="Height" Value="35"/>
+                                <Setter TargetName="Reading" Property="Height" Value="32"/>
                                 <Setter TargetName="Badge" Property="DockPanel.Dock" Value="Top"/>
-                                <Setter TargetName="Badge" Property="Margin" Value="0,0,0,3"/>
                             </DataTrigger>
                             <DataTrigger Binding="{Binding LayoutEdge, RelativeSource={RelativeSource AncestorType=local:QuotaHud}}" Value="{x:Static local:HudEdge.Bottom}">
                                 <Setter TargetName="Reading" Property="Width" Value="51"/>
-                                <Setter TargetName="Reading" Property="Height" Value="35"/>
+                                <Setter TargetName="Reading" Property="Height" Value="32"/>
                                 <Setter TargetName="Badge" Property="DockPanel.Dock" Value="Bottom"/>
-                                <Setter TargetName="Badge" Property="Margin" Value="0,3,0,0"/>
                             </DataTrigger>
                             <MultiDataTrigger>
                                 <MultiDataTrigger.Conditions>
@@ -196,6 +198,5 @@
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
-        </DockPanel>
     </Border>
 </Window>

@@ -5,19 +5,40 @@
 body{font:17px/1.7 system-ui,sans-serif;color:#e9eef7;background:#10131a;margin:0}
 main{max-width:38rem;margin:12vh auto;padding:0 1.5rem}h1{font-size:2.6rem;margin:0}p{color:#bec9d8}
 a{color:#89c6ff}.download{display:inline-block;background:#50e774;color:#10131a;padding:.5rem 1rem;border-radius:.5rem;font-weight:650;text-decoration:none}
+.package{margin:1.4rem 0}.package small{display:block;margin-top:.35rem;color:#bec9d8}
 </style>
 <main><h1>QuotaTray</h1><p>在 Windows 托盘查看 Codex、火山引擎和 Antigravity 的额度。解压后运行 CodexQuotaTray.exe，火山引擎用户可在设置中填写自己的密钥。</p>
-<p id="release" aria-live="polite">正在读取最新版本…</p>
+<div class="package">
+  <div id="lightweight" aria-live="polite">正在读取轻量包…</div>
+  <small>需要 <a href="https://dotnet.microsoft.com/zh-cn/download/dotnet/10.0">.NET 10 桌面运行时（x64）</a>。</small>
+</div>
+<div class="package">
+  <div id="portable" aria-live="polite">正在读取便携包…</div>
+  <small>内置运行时，解压即可运行。</small>
+</div>
 <a href="https://github.com/Aver58/QuotaTray">查看源码与使用说明</a></main>
 <script type="module">
-const area = document.querySelector("#release");
-try {
-  const res = await fetch("/latest.json");
-  if (!res.ok) throw Error();
-  const {tag, asset} = await res.json();
-  if (!/^v\d+\.\d+\.\d+$/.test(tag) || asset !== `CodexQuotaTray-${tag}-win-x64.zip`) throw Error();
-  const link = document.createElement("a");
-  link.className = "download"; link.href = "/downloads/" + asset;
-  link.textContent = "下载 Windows x64 · " + tag; area.replaceChildren(link);
-} catch { area.textContent = "暂时无法获取版本，请稍后重试。"; }
+async function showDownload(selector, manifest, label, suffix) {
+  const area = document.querySelector(selector);
+  try {
+    const res = await fetch(manifest);
+    if (!res.ok) throw new Error();
+    const { tag, asset, size } = await res.json();
+    if (!/^v\d+\.\d+\.\d+$/.test(tag) || asset !== `CodexQuotaTray-${tag}-win-x64${suffix}.zip` ||
+        !Number.isSafeInteger(size) || size <= 0) throw new Error();
+    const link = document.createElement("a");
+    if (suffix) link.className = "download";
+    link.href = "/downloads/" + asset;
+    const displaySize = size < 1048576 ? `${Math.round(size / 1024)} KiB` : `${(size / 1048576).toFixed(1)} MiB`;
+    link.textContent = `下载${label} · ${tag} · ${displaySize}`;
+    area.replaceChildren(link);
+  } catch {
+    area.textContent = `暂时无法获取${label}。`;
+  }
+}
+
+await Promise.all([
+  showDownload("#lightweight", "/latest-lightweight.json", "轻量包", "-lightweight"),
+  showDownload("#portable", "/latest.json", "便携包", "")
+]);
 </script></html>

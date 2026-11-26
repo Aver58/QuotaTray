@@ -1,11 +1,11 @@
 using System.ComponentModel;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using CodexQuotaCore;
 using Button = System.Windows.Controls.Button;
+using DrawingPoint = System.Drawing.Point;
 using MenuItem = System.Windows.Controls.MenuItem;
 using Point = System.Windows.Point;
 using Rectangle = System.Drawing.Rectangle;
@@ -28,6 +28,7 @@ public partial class QuotaHud : Window
     ];
     private readonly DispatcherTimer _collapseTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private HudEdge? _dockedEdge = HudEdge.Right;
+    private (Point Pointer, DrawingPoint Window)? _dragStart;
     private bool _dragging;
     private bool _detailsOpen;
 
@@ -39,6 +40,7 @@ public partial class QuotaHud : Window
     }
 
     internal event Action<QuotaSource>? DetailsRequested;
+    internal event Action? TopmostRequested;
 
     public HudEdge LayoutEdge
     {
@@ -52,10 +54,10 @@ public partial class QuotaHud : Window
         private set => SetValue(IsExpandedProperty, value);
     }
 
-    internal bool IsPinned
+    internal void SetAlwaysOnTop(bool enabled)
     {
-        get => Pin.IsChecked;
-        set => Pin.IsChecked = value;
+        Topmost = enabled;
+        TopmostOption.IsChecked = enabled;
     }
 
     internal void ApplySnapshot(QuotaSource source, CodexQuotaSnapshot snapshot) =>
@@ -83,14 +85,7 @@ public partial class QuotaHud : Window
         }
         else
         {
-            Dispatcher.BeginInvoke(() =>
-            {
-                if (!IsActive && !HudBody.IsMouseOver)
-                {
-                    HideIfTransient();
-                }
-                QueueCollapse();
-            });
+            QueueCollapse();
         }
     }
 
@@ -111,14 +106,6 @@ public partial class QuotaHud : Window
         var side = edge ?? (reference.Left + reference.Width / 2 < area.Left + area.Width / 2
             ? HudEdge.Left : HudEdge.Right);
         LayoutEdge = side;
-        DockPanel.SetDock(Grip, side switch
-        {
-            HudEdge.Left => Dock.Right,
-            HudEdge.Right => Dock.Left,
-            HudEdge.Top => Dock.Bottom,
-            _ => Dock.Top
-        });
-        UpdateGrip();
 
         UpdateLayout();
         var bounds = HudPlacement.Bounds(this);
@@ -131,17 +118,6 @@ public partial class QuotaHud : Window
         }
     }
 
-    private void UpdateGrip()
-    {
-        var horizontal = LayoutEdge is HudEdge.Top or HudEdge.Bottom;
-        var size = IsExpanded ? 12 : 5;
-        Grip.Width = horizontal ? double.NaN : size;
-        Grip.Height = horizontal ? size : double.NaN;
-        GripMark.Width = horizontal ? 24 : 2;
-        GripMark.Height = horizontal ? 2 : 24;
-        GripMark.Visibility = IsExpanded ? Visibility.Visible : Visibility.Hidden;
-    }
-
     private void SetExpanded(bool expanded)
     {
         if (IsExpanded == expanded)
@@ -151,7 +127,6 @@ public partial class QuotaHud : Window
 
         var bounds = IsVisible ? HudPlacement.Bounds(this) : Rectangle.Empty;
         IsExpanded = expanded;
-        UpdateGrip();
         if (bounds.IsEmpty)
         {
             return;
@@ -169,7 +144,10 @@ public partial class QuotaHud : Window
     private void HudBody_OnMouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
     {
         _collapseTimer.Stop();
-        SetExpanded(true);
+        if (!_dragging)
+        {
+            SetExpanded(true);
+        }
     }
 
     private void HudBody_OnMouseLeave(object sender, System.Windows.Input.MouseEventArgs e) => QueueCollapse();
@@ -200,36 +178,81 @@ public partial class QuotaHud : Window
         }
     }
 
-    private void Grip_OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    private void HudBody_OnPointerDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.LeftButton != MouseButtonState.Pressed)
+        _dragStart = (PointToScreen(e.GetPosition(this)), HudPlacement.Bounds(this).Location);
+        _collapseTimer.Stop();
+    }
+
+    // Buttons capture the mouse themselves. Capture here for presses on the panel around them.
+    private void HudBody_OnBackgroundDown(object sender, MouseButtonEventArgs e) => HudBody.CaptureMouse();
+
+    private void HudBody_OnPointerUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_dragging)
+        {
+            e.Handled = true;
+        }
+        EndDrag();
+    }
+
+    private void HudBody_OnPointerMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_dragStart is not { } origin || e.LeftButton != MouseButtonState.Pressed)
         {
             return;
         }
 
-        var start = HudPlacement.Bounds(this);
-        _dragging = true;
-        try
+        var position = PointToScreen(e.GetPosition(this));
+        var dx = position.X - origin.Pointer.X;
+        var dy = position.Y - origin.Pointer.Y;
+        if (!_dragging)
         {
-            DragMove();
-        }
-        catch (InvalidOperationException)
-        {
-            return;
-        }
-        finally
-        {
-            _dragging = false;
-            QueueCollapse();
+            var dpi = VisualTreeHelper.GetDpi(this);
+            if (Math.Abs(dx) < SystemParameters.MinimumHorizontalDragDistance * dpi.DpiScaleX &&
+                Math.Abs(dy) < SystemParameters.MinimumVerticalDragDistance * dpi.DpiScaleY)
+            {
+                return;
+            }
+
+            // Taking capture from the button cancels its click before the panel begins to move.
+            if (!HudBody.CaptureMouse())
+            {
+                return;
+            }
+            _dragging = true;
         }
 
-        var bounds = HudPlacement.Bounds(this);
-        if (bounds.Location != start.Location)
+        e.Handled = true;
+        HudPlacement.Move(this, new DrawingPoint(origin.Window.X + (int)Math.Round(dx), origin.Window.Y + (int)Math.Round(dy)));
+    }
+
+    private void HudBody_OnLostMouseCapture(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (e.OriginalSource == HudBody && _dragStart is not null)
         {
+            EndDrag();
+        }
+    }
+
+    private void EndDrag()
+    {
+        var moved = _dragging;
+        _dragStart = null;
+        _dragging = false;
+        if (HudBody.IsMouseCaptured)
+        {
+            HudBody.ReleaseMouseCapture();
+        }
+
+        if (moved && IsVisible)
+        {
+            var bounds = HudPlacement.Bounds(this);
             var area = Screen.FromPoint(System.Windows.Forms.Cursor.Position).WorkingArea;
             var distance = (int)Math.Round(24 * VisualTreeHelper.GetDpi(this).DpiScaleX);
             PlaceOnScreen(area, bounds, HudPlacement.FindSnapEdge(area, PanelBounds(), distance));
         }
+        QueueCollapse();
     }
 
     private void Dock_OnClick(object sender, RoutedEventArgs e)
@@ -241,38 +264,19 @@ public partial class QuotaHud : Window
         }
     }
 
+    private void Topmost_OnClick(object sender, RoutedEventArgs e) => TopmostRequested?.Invoke();
+
     private void Close_OnClick(object sender, RoutedEventArgs e) => Hide();
 
-    private void Actions_OnClosed(object? sender, RoutedEventArgs e) =>
-        Dispatcher.BeginInvoke(() =>
-        {
-            if (!IsActive)
-            {
-                HideIfTransient();
-            }
-            QueueCollapse();
-        });
-
-    private void Window_OnDeactivated(object? sender, EventArgs e)
-    {
-        HideIfTransient();
-        QueueCollapse();
-    }
+    private void Actions_OnClosed(object? sender, RoutedEventArgs e) => QueueCollapse();
 
     private void Window_OnIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (!IsVisible)
         {
             _collapseTimer.Stop();
+            EndDrag();
             SetExpanded(false);
-        }
-    }
-
-    private void HideIfTransient()
-    {
-        if (!IsPinned && !_detailsOpen && !_dragging && !Actions.IsOpen)
-        {
-            Hide();
         }
     }
 

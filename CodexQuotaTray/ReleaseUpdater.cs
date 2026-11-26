@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -22,12 +23,15 @@ internal static class ReleaseUpdater
         Timeout = TimeSpan.FromSeconds(45)
     };
     private const string ExeName = "CodexQuotaTray.exe";
+    private static readonly bool IsLightweight = typeof(App).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+        .Any(attribute => attribute.Key == "QuotaTrayPackageFlavor" && attribute.Value == "Lightweight");
     internal static readonly Version Current = Version.Parse(typeof(App).Assembly.GetName().Version!.ToString(3));
     internal static string FailureFile => Path.Combine(Path.GetDirectoryName(TraySettings.SettingsPath)!, "last-update-failure.txt");
 
     public static async Task<ReleasePackage?> FindNewRelease(CancellationToken token)
     {
-        using var response = await Feed.GetAsync("latest.json", token);
+        var manifest = IsLightweight ? "latest-lightweight.json" : "latest.json";
+        using var response = await Feed.GetAsync(manifest, token);
         if (response.StatusCode == HttpStatusCode.NotFound)
             throw new InvalidDataException("更新站暂未发布稳定版。");
         response.EnsureSuccessStatusCode();
@@ -39,7 +43,8 @@ internal static class ReleaseUpdater
             throw new InvalidDataException("Release 标签需要使用 v主版本.次版本.修订号。");
         if (version <= Current) return null;
 
-        var name = $"CodexQuotaTray-{tag}-win-x64.zip";
+        var suffix = IsLightweight ? "-lightweight" : "";
+        var name = $"CodexQuotaTray-{tag}-win-x64{suffix}.zip";
         var digest = release.GetProperty("sha256").GetString();
         var size = release.GetProperty("size").GetInt64();
         if (release.GetProperty("asset").GetString() != name || digest is not { Length: 64 } ||
@@ -55,7 +60,7 @@ internal static class ReleaseUpdater
         var folder = Path.GetDirectoryName(target)!;
         if (!string.Equals(Path.GetFileName(target), ExeName, StringComparison.OrdinalIgnoreCase) ||
             File.Exists(Path.Combine(folder, "CodexQuotaTray.dll")))
-            throw new InvalidOperationException("请从 Windows x64 便携版运行自动更新。");
+            throw new InvalidOperationException("请从 Windows x64 下载包解压并运行 CodexQuotaTray.exe 后再更新。");
         var id = Guid.NewGuid().ToString("N");
         var stage = Directory.CreateDirectory(Path.Combine(folder, ".codex-update-" + id)).FullName;
         var zip = Path.Combine(stage, "package.zip");

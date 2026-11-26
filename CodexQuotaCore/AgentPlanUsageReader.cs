@@ -11,29 +11,27 @@ public sealed class AgentPlanUsageReader
     private const string Host = "ark.cn-beijing.volcengineapi.com";
     private const string Region = "cn-beijing";
     private const string Service = "ark";
-    private const string Query = "Action=GetAFPUsage&Version=2024-01-01";
-    private const string Endpoint = "https://" + Host + "/?" + Query;
+    private const string QuotaQuery = "Action=GetAFPUsage&Version=2024-01-01";
+    private const string HistoryQuery = "Action=GetUsageDetails&Version=2024-01-01";
+    private const string Endpoint = "https://" + Host + "/?";
     private static readonly HttpClient HttpClient = new() { Timeout = TimeSpan.FromSeconds(10) };
+    private static readonly TimeSpan BeijingOffset = TimeSpan.FromHours(8);
 
-    public CodexQuotaSnapshot ReadSnapshot(
-        string accessKeyId,
-        string secretAccessKey,
-        CodexQuotaSnapshot localTokenUsage)
+    public CodexQuotaSnapshot ReadSnapshot(string accessKeyId, string secretAccessKey)
     {
         try
         {
-            using var response = SendSignedRequest(accessKeyId, secretAccessKey);
+            using var response = SendSignedRequest(accessKeyId, secretAccessKey, QuotaQuery, "{}");
             using var document = JsonDocument.Parse(response.Content.ReadAsStream());
             if (!response.IsSuccessStatusCode)
             {
                 var detail = ReadErrorMessage(document.RootElement);
-                return WithUnavailableQuotas(localTokenUsage,
-                    $"火山引擎 Agent Plan 查询失败（HTTP {(int)response.StatusCode}）。{detail}");
+                return WithUnavailableQuotas($"火山引擎 Agent Plan 查询失败（HTTP {(int)response.StatusCode}）。{detail}");
             }
 
             if (!document.RootElement.TryGetProperty("Result", out var result) || result.ValueKind != JsonValueKind.Object)
             {
-                return WithUnavailableQuotas(localTokenUsage, "火山引擎未返回 Agent Plan 用量。");
+                return WithUnavailableQuotas("火山引擎未返回 Agent Plan 用量。");
             }
 
             var fiveHour = ReadBucket(result, "AFPFiveHour", 300);
@@ -54,23 +52,106 @@ public sealed class AgentPlanUsageReader
                 daily,
                 monthly,
                 null,
-                localTokenUsage.TodayTokens,
-                localTokenUsage.LastSevenDays,
-                Endpoint,
-                status)
-            {
-                Last24Hours = localTokenUsage.Last24Hours
-            };
+                0,
+                [],
+                Endpoint + QuotaQuery,
+                status);
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or JsonException or CryptographicException or InvalidOperationException)
         {
-            return WithUnavailableQuotas(localTokenUsage, $"暂时无法获取火山引擎 Agent Plan 用量。{ex.Message}");
+            return WithUnavailableQuotas($"暂时无法获取火山引擎 Agent Plan 用量。{ex.Message}");
         }
     }
 
-    private static HttpResponseMessage SendSignedRequest(string accessKeyId, string secretAccessKey)
+    public AgentPlanTokenHistory ReadTokenHistory(string accessKeyId, string secretAccessKey)
     {
-        const string body = "{}";
+        var now = DateTimeOffset.UtcNow.ToOffset(BeijingOffset);
+        var body = JsonSerializer.Serialize(new
+        {
+            QueryInterval = "Hour",
+            Filter = new
+            {
+                StartTime = now.AddDays(-6).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                EndTime = now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            }
+        });
+
+        try
+        {
+            using var response = SendSignedRequest(accessKeyId, secretAccessKey, HistoryQuery, body);
+            if (!response.IsSuccessStatusCode)
+            {
+                var code = (int)response.StatusCode;
+                var message = code is 401 or 403
+                    ? $"用量明细鉴权失败（HTTP {code}）。"
+                    : $"暂时无法获取用量明细（HTTP {code}）。";
+                return new AgentPlanTokenHistory(now, [], [], message);
+            }
+
+            using var document = JsonDocument.Parse(response.Content.ReadAsStream());
+            if (document.RootElement.TryGetProperty("Result", out var result) && result.ValueKind == JsonValueKind.Object &&
+                result.TryGetProperty("Details", out var details) && details.ValueKind == JsonValueKind.Array)
+            {
+                return AggregateTokenHistory(details, now);
+            }
+
+            var error = ReadErrorMessage(document.RootElement);
+            var status = string.IsNullOrWhiteSpace(error) ? "暂无可读取的套餐用量明细。" : "用量明细查询失败。";
+            return new AgentPlanTokenHistory(now, [], [], status);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or JsonException or CryptographicException
+                                   or InvalidOperationException or OperationCanceledException or OverflowException)
+        {
+            return new AgentPlanTokenHistory(now, [], [], "暂时无法获取火山引擎用量明细。");
+        }
+    }
+
+    private static AgentPlanTokenHistory AggregateTokenHistory(JsonElement details, DateTimeOffset now)
+    {
+        var currentHour = new DateTimeOffset(now.Year, now.Month, now.Day, now.Hour, 0, 0, now.Offset);
+        var firstHour = currentHour.AddHours(-23);
+        var firstDay = DateOnly.FromDateTime(now.DateTime).AddDays(-6);
+        var earliest = new DateTimeOffset(firstDay.ToDateTime(TimeOnly.MinValue), now.Offset).ToUnixTimeMilliseconds();
+        var latest = now.ToUnixTimeMilliseconds();
+        var hourly = new long[24];
+        var daily = new long[7];
+        foreach (var detail in details.EnumerateArray())
+        {
+            if (detail.ValueKind != JsonValueKind.Object ||
+                !detail.TryGetProperty("Unit", out var unit) || unit.ValueKind != JsonValueKind.String ||
+                !string.Equals(unit.GetString(), "Tokens", StringComparison.OrdinalIgnoreCase) ||
+                !detail.TryGetProperty("Time", out var time) || time.ValueKind != JsonValueKind.Number ||
+                !time.TryGetInt64(out var milliseconds) || milliseconds < earliest || milliseconds > latest ||
+                !detail.TryGetProperty("Usage", out var usage) || usage.ValueKind != JsonValueKind.Number ||
+                !usage.TryGetInt64(out var tokens) || tokens <= 0)
+            {
+                continue;
+            }
+
+            var timestamp = DateTimeOffset.FromUnixTimeMilliseconds(milliseconds).ToOffset(now.Offset);
+            var day = DateOnly.FromDateTime(timestamp.DateTime).DayNumber - firstDay.DayNumber;
+            daily[day] = checked(daily[day] + tokens);
+            if (timestamp >= firstHour)
+            {
+                var hour = (int)(timestamp - firstHour).TotalHours;
+                hourly[hour] = checked(hourly[hour] + tokens);
+            }
+        }
+
+        if (daily.All(total => total == 0))
+        {
+            return new AgentPlanTokenHistory(now, [], [], "暂无已同步的 Token 用量。");
+        }
+
+        return new AgentPlanTokenHistory(now,
+            hourly.Select((total, index) => new TimedTokenUsage(
+                firstHour.AddHours(index), index == hourly.Length - 1 ? now : firstHour.AddHours(index + 1), total)).ToArray(),
+            daily.Select((total, index) => new DailyTokenUsage(firstDay.AddDays(index), total)).ToArray(),
+            "模型调用明细约延迟 0.5–1 天。");
+    }
+
+    private static HttpResponseMessage SendSignedRequest(string accessKeyId, string secretAccessKey, string query, string body)
+    {
         const string contentType = "application/json";
         const string signedHeaders = "content-type;host;x-content-sha256;x-date";
         var payloadHash = Sha256Hex(body);
@@ -78,7 +159,7 @@ public sealed class AgentPlanUsageReader
         var shortDate = requestDate[..8];
         var credentialScope = $"{shortDate}/{Region}/{Service}/request";
         var canonicalHeaders = $"content-type:{contentType}\nhost:{Host}\nx-content-sha256:{payloadHash}\nx-date:{requestDate}\n";
-        var canonicalRequest = $"POST\n/\n{Query}\n{canonicalHeaders}\n{signedHeaders}\n{payloadHash}";
+        var canonicalRequest = $"POST\n/\n{query}\n{canonicalHeaders}\n{signedHeaders}\n{payloadHash}";
         var stringToSign = $"HMAC-SHA256\n{requestDate}\n{credentialScope}\n{Sha256Hex(canonicalRequest)}";
         var signingKey = DeriveSigningKey(secretAccessKey, shortDate);
         var signature = Convert.ToHexString(HMACSHA256.HashData(signingKey, Encoding.UTF8.GetBytes(stringToSign))).ToLowerInvariant();
@@ -86,7 +167,7 @@ public sealed class AgentPlanUsageReader
 
         var requestBody = new ByteArrayContent(Encoding.UTF8.GetBytes(body));
         requestBody.Headers.ContentType = new MediaTypeHeaderValue(contentType);
-        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint)
+        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint + query)
         {
             Content = requestBody
         };
@@ -163,22 +244,15 @@ public sealed class AgentPlanUsageReader
         return null;
     }
 
-    private static CodexQuotaSnapshot WithUnavailableQuotas(CodexQuotaSnapshot localUsage, string status) =>
-        new(
-            DateTimeOffset.UtcNow,
-            QuotaBucket.Unavailable(300),
-            QuotaBucket.Unavailable(10080),
-            QuotaBucket.Unavailable(1440),
-            QuotaBucket.Unavailable(43200),
-            null,
-            localUsage.TodayTokens,
-            localUsage.LastSevenDays,
-            Endpoint,
-            status)
-        {
-            Last24Hours = localUsage.Last24Hours
-        };
+    private static CodexQuotaSnapshot WithUnavailableQuotas(string status) =>
+        CodexQuotaSnapshot.Empty(status, Endpoint + QuotaQuery) with { LatestEventAt = DateTimeOffset.UtcNow };
 
     private static string Sha256Hex(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 }
+
+public sealed record AgentPlanTokenHistory(
+    DateTimeOffset RetrievedAt,
+    IReadOnlyList<TimedTokenUsage> Last24Hours,
+    IReadOnlyList<DailyTokenUsage> LastSevenDays,
+    string Notice);

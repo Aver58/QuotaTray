@@ -10,6 +10,7 @@ public partial class QuotaWindow : Window
 {
     private const double PreferredWidth = 480;
     private CodexQuotaSnapshot? _snapshot;
+    private QuotaSource _source;
 
     public QuotaWindow()
     {
@@ -34,6 +35,7 @@ public partial class QuotaWindow : Window
     internal void ApplySnapshot(CodexQuotaSnapshot snapshot, QuotaSource source)
     {
         _snapshot = snapshot;
+        _source = source;
         var appearance = ProviderAppearance.For(source);
         SourceTitleText.Text = appearance.Name;
         SourceIcon.Source = appearance.Icon;
@@ -56,9 +58,10 @@ public partial class QuotaWindow : Window
                 ? Visibility.Collapsed : Visibility.Visible;
         }
 
-        ChartTitleText.Text = volcano ? "Codex 本机 Token 用量" : "Token 用量";
-        var status = string.IsNullOrEmpty(snapshot.TokenHistoryNotice)
-            ? snapshot.Status : $"{snapshot.Status} · {snapshot.TokenHistoryNotice}";
+        ChartTitleText.Text = volcano ? "火山引擎 Token 消耗" : "分时 Token 消耗";
+        var historyNotice = snapshot.TokenHistoryNotice;
+        var status = string.IsNullOrEmpty(historyNotice) || (volcano && snapshot.LastSevenDays.Count == 0)
+            ? snapshot.Status : $"{snapshot.Status} · {historyNotice}";
         StatusText.Text = status;
         StatusText.ToolTip = status;
         UpdatedText.Text = snapshot.LatestEventAt is { } at ? $"更新 {at.LocalDateTime:MM/dd HH:mm}" : "";
@@ -82,23 +85,35 @@ public partial class QuotaWindow : Window
         }
 
         var week = WeekRange.IsChecked == true;
+        var volcano = _source == QuotaSource.VolcengineAgentPlan;
+        var tickInterval = volcano ? 6 : 24;
         TokenChartBar[] points = week
             ? snapshot.LastSevenDays.Select(day => new TokenChartBar(
                 $"{day.Date:yyyy/MM/dd}", $"{day.Date:MM/dd}", day.TotalTokens)).ToArray()
-            : snapshot.Last24Hours.Select((slot, index) => new TokenChartBar(
-                FormatPeriod(slot), index % 24 == 0 ? $"{slot.Start.LocalDateTime:HH:mm}" : null, slot.TotalTokens)).ToArray();
+            : snapshot.Last24Hours.Select((slot, index) =>
+            {
+                var start = volcano ? slot.Start : slot.Start.ToLocalTime();
+                var end = volcano ? slot.End : slot.End.ToLocalTime();
+                return new TokenChartBar(FormatPeriod(start, end), index % tickInterval == 0 ? $"{start:HH:mm}" : null, slot.TotalTokens);
+            }).ToArray();
         Chart.SetItems(points);
-        ChartSummaryText.Text = points.Length == 0
-            ? "本地会话记录"
-            : $"{FormatTokens(points.Sum(point => (decimal)point.Tokens))} Token · " +
-              (week ? "按天" : "每 15 分钟一柱") +
-              $" · 今日 {FormatTokens(snapshot.TodayTokens)}";
+        var visibility = volcano && points.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        Chart.Visibility = visibility;
+        TokenRangeOptions.Visibility = visibility;
+        if (points.Length == 0)
+        {
+            ChartSummaryText.Text = volcano ? snapshot.TokenHistoryNotice ?? "正在读取火山引擎用量明细…" : "本地会话记录";
+            return;
+        }
+
+        var interval = week ? "每日一柱" : volcano ? "每小时一柱" : "每 15 分钟一柱";
+        var timeZone = volcano ? " · 北京时间" : "";
+        var total = FormatTokens(points.Sum(point => (decimal)point.Tokens));
+        ChartSummaryText.Text = $"近 {(week ? "7 天" : "24 小时")}合计 {total} Token · {interval}{timeZone}";
     }
 
-    private static string FormatPeriod(TimedTokenUsage slot)
+    private static string FormatPeriod(DateTimeOffset start, DateTimeOffset end)
     {
-        var start = slot.Start.ToLocalTime();
-        var end = slot.End.ToLocalTime();
         if (start.Offset != end.Offset)
         {
             return $"{start:MM/dd HH:mm zzz} – {end:MM/dd HH:mm zzz}";

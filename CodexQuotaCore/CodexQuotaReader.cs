@@ -33,11 +33,11 @@ public sealed class CodexQuotaReader
             {
                 var localEventTime = TimeZoneInfo.ConvertTime(tokenEvent.Timestamp, _localTimeZone);
                 var eventDate = DateOnly.FromDateTime(localEventTime.DateTime);
-                if (dayTotals.ContainsKey(eventDate))
+                if (tokenEvent.Timestamp <= localNow && dayTotals.ContainsKey(eventDate))
                 {
-                    dayTotals[eventDate] += tokenEvent.LastTotalTokens;
+                    dayTotals[eventDate] += tokenEvent.TokensSpent;
                 }
-                recent.Add(tokenEvent.Timestamp.ToUnixTimeSeconds(), tokenEvent.LastTotalTokens);
+                recent.Add(tokenEvent.Timestamp.ToUnixTimeSeconds(), tokenEvent.TokensSpent);
 
                 if (latest is null || tokenEvent.Timestamp > latest.Timestamp)
                 {
@@ -178,6 +178,8 @@ public sealed class CodexQuotaReader
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         using var reader = new StreamReader(stream);
+        long? previousTotal = null;
+        long countedWithoutTotal = 0;
 
         while (!reader.EndOfStream)
         {
@@ -201,10 +203,33 @@ public sealed class CodexQuotaReader
                 tokenEvent = null;
             }
 
-            if (tokenEvent is not null)
+            if (tokenEvent is null)
             {
-                yield return tokenEvent;
+                continue;
             }
+
+            var tokens = tokenEvent.TokensSpent;
+            if (tokenEvent.SessionTotal is long total)
+            {
+                if (previousTotal is long previous && total >= previous)
+                {
+                    // Quota-only events can repeat a request with an unchanged session total.
+                    var increase = total - previous;
+                    tokens = Math.Max(0, increase - countedWithoutTotal);
+                    countedWithoutTotal = Math.Max(0, countedWithoutTotal - increase);
+                }
+                else
+                {
+                    countedWithoutTotal = 0;
+                }
+                previousTotal = total;
+            }
+            else if (previousTotal.HasValue)
+            {
+                countedWithoutTotal += tokens;
+            }
+
+            yield return tokenEvent with { TokensSpent = tokens };
         }
     }
 
@@ -231,17 +256,28 @@ public sealed class CodexQuotaReader
             return null;
         }
 
-        var lastTokens = 0L;
-        if (payload.TryGetProperty("info", out var info) &&
-            info.TryGetProperty("last_token_usage", out var lastUsage) &&
-            lastUsage.TryGetProperty("total_tokens", out var lastTotal))
-        {
-            lastTokens = ReadInt64(lastTotal);
-        }
-
+        var hasUsage = payload.TryGetProperty("info", out var info) && info.ValueKind == JsonValueKind.Object;
+        var lastTokens = hasUsage ? ReadTokenTotal(info, "last_token_usage") ?? 0 : 0;
+        var sessionTotal = hasUsage ? ReadTokenTotal(info, "total_token_usage") : null;
         var buckets = ReadBuckets(payload);
 
-        return new TokenCountEvent(timestamp, lastTokens, buckets, sourcePath);
+        return new TokenCountEvent(timestamp, lastTokens, sessionTotal, buckets, sourcePath);
+    }
+
+    private static long? ReadTokenTotal(JsonElement info, string key)
+    {
+        if (!info.TryGetProperty(key, out var usage) || usage.ValueKind != JsonValueKind.Object ||
+            !usage.TryGetProperty("total_tokens", out var count))
+        {
+            return null;
+        }
+        return count.ValueKind switch
+        {
+            JsonValueKind.Number when count.TryGetInt64(out var value) && value >= 0 => value,
+            JsonValueKind.String when long.TryParse(count.GetString(), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var value) && value >= 0 => value,
+            _ => null
+        };
     }
 
     private static IReadOnlyList<QuotaBucket> ReadBuckets(JsonElement payload)
@@ -338,7 +374,8 @@ public sealed class CodexQuotaReader
 
     private sealed record TokenCountEvent(
         DateTimeOffset Timestamp,
-        long LastTotalTokens,
+        long TokensSpent,
+        long? SessionTotal,
         IReadOnlyList<QuotaBucket> RateLimitBuckets,
         string SourcePath
     );

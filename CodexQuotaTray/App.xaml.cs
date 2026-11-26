@@ -31,10 +31,13 @@ public partial class App : System.Windows.Application
     private ToolStripMenuItem? _codexSourceOption;
     private ToolStripMenuItem? _agentPlanSourceOption;
     private ToolStripMenuItem? _antigravitySourceOption;
+    private ToolStripMenuItem? _topmostOption;
     private QuotaHud? _hud;
     private QuotaWindow? _window;
     private QuotaSource _detailSource;
     private QuotaHud? _detailAnchor;
+    private AgentPlanTokenHistory? _volcanoTokenHistory;
+    private bool _readingVolcanoTokenHistory;
     private bool _placingDetails;
     private (int Percent, bool Available)? _trayReading;
 
@@ -44,12 +47,11 @@ public partial class App : System.Windows.Application
 
         _hud = new QuotaHud();
         _hud.DetailsRequested += source => ShowDetails(source, _hud);
+        _hud.TopmostRequested += ToggleTopmost;
         _window = new QuotaWindow();
         _window.RequestHide += (_, _) => _window.Hide();
         _hud.LocationChanged += (_, _) => PlaceAttachedDetails();
         _hud.SizeChanged += (_, _) => PlaceAttachedDetails();
-        _hud.Deactivated += (_, _) => QueueDetailDismissal();
-        _hud.ContextMenu.Closed += (_, _) => QueueDetailDismissal();
         _hud.IsVisibleChanged += (_, _) =>
         {
             if (!_hud.IsVisible && _detailAnchor == _hud)
@@ -58,7 +60,6 @@ public partial class App : System.Windows.Application
             }
         };
         _window.SizeChanged += (_, _) => PlaceAttachedDetails();
-        _window.Deactivated += (_, _) => QueueDetailDismissal();
         _window.IsVisibleChanged += (_, _) =>
         {
             if (!_window.IsVisible)
@@ -76,6 +77,7 @@ public partial class App : System.Windows.Application
             ContextMenuStrip = BuildMenu()
         };
         _trayIcon.MouseClick += TrayIconOnMouseClick;
+        ApplyTopmostPreference();
         ApplyCachedSnapshots();
 
         _timer.Interval = TimeSpan.FromSeconds(_settings.RefreshSeconds);
@@ -92,7 +94,6 @@ public partial class App : System.Windows.Application
         CheckForUpdate(manual: false);
         if (e.Args is ["--show"])
         {
-            _hud.IsPinned = true;
             ShowHud();
         }
         else
@@ -141,6 +142,8 @@ public partial class App : System.Windows.Application
         displayOptions.DropDownItems.Add(_agentPlanSourceOption);
         displayOptions.DropDownItems.Add(_antigravitySourceOption);
         menu.Items.Add(displayOptions);
+        _topmostOption = new ToolStripMenuItem("置顶浮窗", null, (_, _) => ToggleTopmost());
+        menu.Items.Add(_topmostOption);
         menu.Items.Add("设置", null, (_, _) => ShowSettings());
         menu.Items.Add(new ToolStripSeparator());
         _checkUpdate = new ToolStripMenuItem($"检查更新 · v{ReleaseUpdater.Current}", null, (_, _) => CheckForUpdate(manual: true));
@@ -334,17 +337,34 @@ public partial class App : System.Windows.Application
         }
     }
 
-    private void QueueDetailDismissal() => Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+    private void ToggleTopmost()
     {
-        if (_window is { IsVisible: true, IsActive: false } && _detailAnchor?.IsActive != true &&
-            _detailAnchor?.ContextMenu?.IsOpen != true)
+        try
         {
-            _window.Hide();
+            var settings = _settings with { AlwaysOnTop = !_settings.AlwaysOnTop };
+            settings.Save();
+            _settings = settings;
         }
-    });
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(ex.Message, "无法保存置顶设置");
+        }
+        finally
+        {
+            ApplyTopmostPreference();
+        }
+    }
+
+    private void ApplyTopmostPreference()
+    {
+        _hud?.SetAlwaysOnTop(_settings.AlwaysOnTop);
+        if (_window is not null) _window.Topmost = _settings.AlwaysOnTop;
+        if (_topmostOption is not null) _topmostOption.Checked = _settings.AlwaysOnTop;
+    }
 
     private void RefreshSnapshots(bool all = false)
     {
+        RefreshVolcanoTokenHistory(force: all);
         if (all || _hud?.IsVisible == true)
         {
             foreach (var source in Sources)
@@ -358,10 +378,49 @@ public partial class App : System.Windows.Application
         if (_window?.IsVisible == true)
         {
             RefreshSource(_detailSource);
-            if (_detailSource == QuotaSource.VolcengineAgentPlan)
-            {
-                RefreshSource(QuotaSource.Codex);
-            }
+        }
+    }
+
+    private async void RefreshVolcanoTokenHistory(bool force = false)
+    {
+        var settings = _settings;
+        if (_window?.IsVisible != true || _detailSource != QuotaSource.VolcengineAgentPlan ||
+            !settings.HasVolcengineCredentials || _readingVolcanoTokenHistory || _exit.IsCancellationRequested ||
+            (!force && _volcanoTokenHistory is { } saved && saved.RetrievedAt > DateTimeOffset.UtcNow.AddMinutes(-5)))
+        {
+            return;
+        }
+
+        AgentPlanTokenHistory history;
+        _readingVolcanoTokenHistory = true;
+        try
+        {
+            history = await Task.Run(() => _agentPlanUsageReader.ReadTokenHistory(
+                settings.VolcengineAccessKeyId!, settings.VolcengineSecretAccessKey!), _exit.Token);
+        }
+        catch (OperationCanceledException) when (_exit.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            _readingVolcanoTokenHistory = false;
+        }
+
+        if (_exit.IsCancellationRequested)
+        {
+            return;
+        }
+        if (!SameQuotaInputs(QuotaSource.VolcengineAgentPlan, settings, _settings))
+        {
+            RefreshVolcanoTokenHistory();
+            return;
+        }
+
+        _volcanoTokenHistory = history;
+        if (_window?.IsVisible == true && _detailSource == QuotaSource.VolcengineAgentPlan)
+        {
+            ApplyDetails();
         }
     }
 
@@ -408,8 +467,7 @@ public partial class App : System.Windows.Application
         {
             UpdateTrayIcon(snapshot);
         }
-        if (_window?.IsVisible == true &&
-            (source == _detailSource || (_detailSource == QuotaSource.VolcengineAgentPlan && source == QuotaSource.Codex)))
+        if (_window?.IsVisible == true && source == _detailSource)
         {
             ApplyDetails();
         }
@@ -427,7 +485,7 @@ public partial class App : System.Windows.Application
     {
         var id = settings.VolcengineAccessKeyId!;
         var secret = settings.VolcengineSecretAccessKey!;
-        var snapshot = _agentPlanUsageReader.ReadSnapshot(id, secret, Loading);
+        var snapshot = _agentPlanUsageReader.ReadSnapshot(id, secret);
         try
         {
             return snapshot with { VolcanoBalance = _accountBalanceReader.Read(id, secret) };
@@ -451,15 +509,13 @@ public partial class App : System.Windows.Application
     private void ApplyDetails()
     {
         var snapshot = GetSnapshot(_detailSource);
-        if (_detailSource == QuotaSource.VolcengineAgentPlan)
+        if (_detailSource == QuotaSource.VolcengineAgentPlan && _volcanoTokenHistory is { } history)
         {
-            var codex = GetSnapshot(QuotaSource.Codex);
             snapshot = snapshot with
             {
-                TodayTokens = codex.TodayTokens,
-                LastSevenDays = codex.LastSevenDays,
-                Last24Hours = codex.Last24Hours,
-                TokenHistoryNotice = codex.TokenHistoryNotice
+                LastSevenDays = history.LastSevenDays,
+                Last24Hours = history.Last24Hours,
+                TokenHistoryNotice = history.Notice
             };
         }
         _window?.ApplySnapshot(snapshot, _detailSource);
@@ -505,7 +561,11 @@ public partial class App : System.Windows.Application
 
         try
         {
-            savedSettings = savedSettings with { AutomaticUpdates = _settings.AutomaticUpdates };
+            savedSettings = savedSettings with
+            {
+                AutomaticUpdates = _settings.AutomaticUpdates,
+                AlwaysOnTop = _settings.AlwaysOnTop
+            };
             savedSettings.Save();
             foreach (var source in Sources)
             {
@@ -514,11 +574,19 @@ public partial class App : System.Windows.Application
                     _snapshots.Remove(source);
                 }
             }
+            if (!SameQuotaInputs(QuotaSource.VolcengineAgentPlan, _settings, savedSettings))
+            {
+                _volcanoTokenHistory = null;
+            }
 
             _settings = savedSettings;
             UpdateSourceMenu();
             _timer.Interval = TimeSpan.FromSeconds(_settings.RefreshSeconds);
             ApplyCachedSnapshots();
+            if (_window?.IsVisible == true)
+            {
+                ApplyDetails();
+            }
             RefreshSnapshots();
             return true;
         }
@@ -608,8 +676,13 @@ public partial class App : System.Windows.Application
             ? $"重置卡 {credits}"
             : string.Empty;
         var details = string.Join(" ", new[] { primary, week, resetCards }.Where(value => value.Length > 0));
-        var today = source == QuotaSource.Antigravity && snapshot.LastSevenDays.Count == 0 ? "--" : FormatTokens(snapshot.TodayTokens);
-        var text = $"{sourceName} {details} 今日 {today}";
+        var today = source switch
+        {
+            QuotaSource.VolcengineAgentPlan => "",
+            QuotaSource.Antigravity when snapshot.LastSevenDays.Count == 0 => " 今日 --",
+            _ => $" 今日 {FormatTokens(snapshot.TodayTokens)}"
+        };
+        var text = (details.Length == 0 ? sourceName : $"{sourceName} {details}") + today;
         return text.Length <= 63 ? text : text[..63];
     }
 
